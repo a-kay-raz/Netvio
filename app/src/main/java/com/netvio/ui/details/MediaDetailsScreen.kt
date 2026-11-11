@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Bitmap
-import android.graphics.drawable.BitmapDrawable
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -165,6 +164,7 @@ import androidx.compose.ui.unit.sp
 import com.netvio.ui.components.VelvetAlertDialog
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil3.BitmapImage
 import coil3.compose.AsyncImage
 import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
@@ -1989,7 +1989,7 @@ private fun DetailsTitleHeader(
             .transformations(TrimTransparentTransformation())
             .build(),
         onSuccess = { result ->
-            val bitmap = (result.drawable as? BitmapDrawable)?.bitmap
+            val bitmap = (result.image as? BitmapImage)?.bitmap
             logoUsable = bitmap?.let { !it.isMostlyDark() } ?: true
         },
         onError = { logoUsable = false }
