@@ -479,10 +479,14 @@ class HomeViewModel(
                 val combinedSeed = (providerHash * 37L) xor (sessionIdx * 10007L)
                 val providerRandom = kotlin.random.Random(combinedSeed)
 
-                // 3. Select hero candidates from the top core rows so they never get diluted by global progressive rails
+                // 3. Select hero candidates from the top visible TMDB rows so they never get diluted by progressive rails or Stremio rows.
+                // Hidden TMDB rows never reach this ViewModel (the repository
+                // filters them), so when no TMDB row is visible the hero falls
+                // back to all rows; when nothing is visible the hero is empty.
                 val pinnedCoreCount = 4.coerceAtMost(rows.size)
 
-                val heroSourceRows = rows.take(pinnedCoreCount).ifEmpty { rows }
+                val tmdbRows = rows.filter { it.catalogKey?.startsWith("tmdb:") == true }
+                val heroSourceRows = tmdbRows.take(pinnedCoreCount).ifEmpty { rows }
                 val rawCandidates = heroSourceRows.flatMap { it.items }
                     .filter { !it.backdropUrl.isNullOrBlank() || !it.posterUrl.isNullOrBlank() }
                     .distinctBy { it.id }
@@ -521,15 +525,15 @@ class HomeViewModel(
                     (heroWithLogos + heroCandidatesPool.filter { it.logoUrl.isNullOrBlank() }).take(6)
                 }
 
-                // 5. Keep core rows pinned at the top; permute secondary discovery rows and rotate item offsets.
-                // Stremio rows (catalogKey != null) keep the Catalog Manager order
-                // and are never shuffled, so Home reflects the saved row order.
+                // 5. Keep core rows pinned at the top and keep every row in
+                // repository order, which already reflects the saved Catalog
+                // Manager order, visibility and titles; only rotate the item
+                // offset inside rows beyond the first 4 so repeat visits feel
+                // fresh. Rows are never shuffled here.
                 val processedRows = if (rows.size > pinnedCoreCount) {
                     val pinnedRows = rows.take(pinnedCoreCount)
                     val otherRows = rows.drop(pinnedCoreCount)
-                    val shuffledRows = otherRows.filter { it.catalogKey == null }.shuffled(providerRandom)
-                    val orderedCatalogRows = otherRows.filter { it.catalogKey != null }
-                    pinnedRows + (shuffledRows + orderedCatalogRows).map { row ->
+                    pinnedRows + otherRows.map { row ->
                         if (row.items.size > 4) {
                             val offset = providerRandom.nextInt(row.items.size)
                             row.copy(items = row.items.drop(offset) + row.items.take(offset))

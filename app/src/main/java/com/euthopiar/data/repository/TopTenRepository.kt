@@ -16,7 +16,7 @@ import kotlinx.serialization.json.Json
 import java.util.concurrent.TimeUnit
 
 /**
- * Repository providing Universal TMDB Top 10 items for Movies and TV Series.
+ * Repository providing Indian TMDB Top 10 items for Movies and TV Series.
  * Implements a 6-hour stale-while-revalidate Room database cache so Home paints instantly
  * with 0 network calls on warm starts.
  */
@@ -32,7 +32,9 @@ class TopTenRepository(
         type: MediaType,
         language: String = "en-US"
     ): Flow<List<MediaItem>> = channelFlow {
-        val cacheKey = "${type.name.lowercase()}_day_${language.lowercase()}"
+        // India marker in the key so a cached Global Top 10 from an older
+        // build is never served as the Indian Top 10.
+        val cacheKey = "${type.name.lowercase()}_india_day_${language.lowercase()}"
 
         // 1. Emit cached data immediately from Room if available
         val cached = dao.getByKey(cacheKey)
@@ -54,7 +56,7 @@ class TopTenRepository(
                 // Double check cache timestamp inside mutex
                 val latestCached = dao.getByKey(cacheKey)
                 if (latestCached == null || (System.currentTimeMillis() - latestCached.fetchedAtEpochMs > cacheTtlMs)) {
-                    val freshItems = TmdbBridge.fetchTrendingTopTen(type, language)
+                    val freshItems = TmdbBridge.fetchIndianTopTen(type, language)
                     if (freshItems.isNotEmpty()) {
                         val entity = TopTenEntity(
                             cacheKey = cacheKey,

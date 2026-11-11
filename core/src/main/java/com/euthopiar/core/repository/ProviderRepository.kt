@@ -51,6 +51,44 @@ open class ProviderRepository(
         buildHomeCatalogDefinitions(readyEnabledAddons())
     }
 
+    /**
+     * Returns one definition per built-in TMDB home row (Pan-India core feeds
+     * plus progressive rails). Used by the Catalog Manager alongside
+     * [getCatalogDefinitions]; unlike the home rails this is not filtered by
+     * saved visibility. TMDB definitions are never used to fetch anything —
+     * TMDB rows come from [TmdbBridge].
+     */
+    suspend fun getTmdbCatalogDefinitions(): List<HomeCatalogDefinition> = withContext(Dispatchers.IO) {
+        buildTmdbCatalogDefinitions()
+    }
+
+    /**
+     * Applies the saved Catalog Manager preferences to home rows: drops rows
+     * the user hid from Home, renames rows the user renamed, and stable-sorts
+     * keyed rows by their saved order. Rows without a saved order keep their
+     * fetch order (Int.MAX_VALUE default), and rows without a key are never
+     * reordered. The sort is stable, so equal order values never shuffle the
+     * fetch order. Shared by [getHomeCatalog] and [getProgressiveHomeRails]
+     * so TMDB and Stremio rows follow exactly the same rules.
+     */
+    private fun applyCatalogPreferences(
+        rows: List<CatalogRow>,
+        preferences: Map<String, CatalogPreference>
+    ): List<CatalogRow> {
+        val visible = rows.filter { row ->
+            val key = row.catalogKey ?: return@filter true
+            preferences[key]?.onHome != false
+        }
+        val renamed = visible.map { row ->
+            val key = row.catalogKey
+            val customTitle = key?.let { preferences[it]?.customTitle?.takeIf { title -> title.isNotBlank() } }
+            if (customTitle != null) row.copy(title = customTitle) else row
+        }
+        return renamed.sortedWith(
+            compareBy { row -> row.catalogKey?.let { preferences[it]?.orderIndex } ?: Int.MAX_VALUE }
+        )
+    }
+
     /** Enabled addons with a loaded manifest, refreshing stale manifests first. */
     private suspend fun readyEnabledAddons(): List<ManagedAddon> {
         val addonRepo = com.euthopiar.core.addons.AddonRepository.getInstanceOrNull() ?: return emptyList()
@@ -72,8 +110,11 @@ open class ProviderRepository(
     }
 
     /**
-     * Fetches the home catalog rows. Fetches canonical TMDB core rows first (Trending, Popular),
-     * then dynamically fetches and appends enabled Stremio addon catalog rails.
+     * Fetches the home catalog rows. Fetches canonical TMDB core rows first
+     * (Pan-India feeds), then dynamically fetches and appends enabled Stremio
+     * addon catalog rails. Saved Catalog Manager preferences (visibility,
+     * order, custom titles) are applied to the combined list, so hidden rows
+     * never reach Home and reordered rows arrive in the user's saved order.
      */
     suspend fun getHomeCatalog(): List<CatalogRow> = withContext(Dispatchers.IO) {
         val tmdbRows = try {
@@ -83,27 +124,55 @@ open class ProviderRepository(
         }
 
         val stremioRows = fetchStremioCatalogRails(offset = 0, limit = 6)
-        val combined = tmdbRows + stremioRows
+        val preferences = readCatalogPreferences()
+        val combined = applyCatalogPreferences(tmdbRows + stremioRows, preferences)
         if (combined.isNotEmpty()) combined else tmdbRows
     }
 
     /**
      * Progressively loads batches of extra catalog rails for smooth infinite-scrolling.
      * Supports both progressive TMDB genres and Stremio catalog pagination.
+     * Hidden TMDB rails are skipped inside the loop: successive TMDB batches
+     * are fetched until [limit] visible rows are collected or the TMDB rails
+     * are exhausted, so hiding rails cannot end loading early. Only then does
+     * loading fall back to Stremio rails. The offset contract is preserved:
+     * TMDB rails first, Stremio after offset 38.
      */
     suspend fun getProgressiveHomeRails(offset: Int, limit: Int = 4): List<CatalogRow> = withContext(Dispatchers.IO) {
-        val tmdbRails = try {
-            TmdbBridge.fetchProgressiveRails(DohDns.metadataClient, offset, limit)
-        } catch (_: Exception) {
-            emptyList<CatalogRow>()
+        val preferences = readCatalogPreferences()
+        val visible = mutableListOf<CatalogRow>()
+        var tmdbOffset = offset
+        val tmdbRailCount = TmdbBridge.PROGRESSIVE_RAIL_DEFINITIONS.size
+        while (visible.size < limit && tmdbOffset < tmdbRailCount) {
+            val take = minOf(limit - visible.size, tmdbRailCount - tmdbOffset)
+            val batch = try {
+                TmdbBridge.fetchProgressiveRails(DohDns.metadataClient, tmdbOffset, take)
+            } catch (_: Exception) {
+                emptyList<CatalogRow>()
+            }
+            // Advance by the number of rail definitions attempted, not by the
+            // number of rows returned, so a failed fetch never re-fetches the
+            // same window forever.
+            tmdbOffset += take
+            if (batch.isNotEmpty()) {
+                visible += applyCatalogPreferences(batch, preferences)
+            }
         }
 
-        if (tmdbRails.isNotEmpty()) {
-            tmdbRails
-        } else {
-            // Load subsequent Stremio catalog rails if TMDB rails have been exhausted
+        if (visible.size < limit) {
+            // TMDB rails exhausted (or too few visible): fall back to Stremio
+            // catalog rails, topping the batch up to [limit] rows.
             val stremioOffset = 6 + (offset - 38).coerceAtLeast(0)
-            fetchStremioCatalogRails(offset = stremioOffset, limit = limit)
+            val stremioRails = fetchStremioCatalogRails(offset = stremioOffset, limit = limit - visible.size)
+            if (stremioRails.isNotEmpty()) {
+                visible += stremioRails
+            }
+        }
+
+        if (visible.isNotEmpty()) {
+            applyCatalogPreferences(visible, preferences)
+        } else {
+            emptyList()
         }
     }
 

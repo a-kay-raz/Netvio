@@ -33,9 +33,10 @@ data class CatalogManagerItem(
 /**
  * ViewModel for the Catalog Manager (Settings -> Reorder Catalogs).
  *
- * Loads the catalog definitions of the enabled Stremio addons and merges them
- * with the saved preferences. Every change is persisted immediately, so Home
- * (which observes the same preferences) reflects it on the next load.
+ * Loads the catalog definitions of the built-in TMDB rows and the enabled
+ * Stremio addons and merges them with the saved preferences. Every change is
+ * persisted immediately, so Home (which observes the same preferences)
+ * reflects it on the next load.
  * Hiding a catalog only flips its [CatalogPreference.onHome] flag; the addon
  * that provides it is never disabled or uninstalled.
  */
@@ -79,7 +80,13 @@ class CatalogManagerViewModel(application: Application) : AndroidViewModel(appli
         viewModelScope.launch {
             _isLoading.value = true
             try {
-                val definitions = repository.getCatalogDefinitions()
+                // TMDB rows first, matching Home's TMDB-first fetch order for
+                // fresh users; Stremio addon catalogs follow. Both kinds share
+                // the same keys, preferences and prune logic below, so hiding,
+                // reordering or renaming a TMDB row works exactly like a
+                // Stremio catalog. A TMDB preference whose key disappears
+                // (feed renamed later) is pruned here by the known-keys check.
+                val definitions = repository.getTmdbCatalogDefinitions() + repository.getCatalogDefinitions()
                 _definitions.value = definitions
                 val knownKeys = definitions.map { it.key }.toSet()
                 val current = preferencesRepository.getCatalogPreferences()

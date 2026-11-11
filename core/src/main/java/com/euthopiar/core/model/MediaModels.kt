@@ -67,10 +67,12 @@ data class CatalogRow(
     val subtitle: String? = null,
     val eyebrow: String? = null,
     /**
-     * Key of the Stremio addon catalog this row came from
-     * (HomeCatalogDefinition.key), or null for built-in rows such as TMDB.
-     * The Catalog Manager uses it to apply the saved order, visibility and
-     * custom title; rows without a key are never reordered by it.
+     * Key of the catalog this row came from (HomeCatalogDefinition.key),
+     * or null for rows without a managed catalog, such as the watchlist row.
+     * TMDB rows carry a "tmdb:<slug>" key; Stremio rows carry their addon
+     * catalog key. The Catalog Manager uses it to apply the saved order,
+     * visibility and custom title; rows without a key are never reordered
+     * by it.
      */
     val catalogKey: String? = null
 )

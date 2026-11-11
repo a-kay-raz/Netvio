@@ -1,6 +1,7 @@
 package com.euthopiar.core.addons
 
 import com.euthopiar.core.model.MediaType
+import com.euthopiar.core.util.TmdbBridge
 
 data class HomeCatalogDefinition(
     val key: String,
@@ -61,6 +62,37 @@ fun buildHomeCatalogDefinitions(addons: List<ManagedAddon>): List<HomeCatalogDef
                 )
             }
     }.distinctBy { it.key }
+
+/**
+ * Builds one [HomeCatalogDefinition] per built-in TMDB home row: the 16
+ * Pan-India core feeds plus the 38 progressive rails. Derived from the same
+ * feed lists the rows themselves are built from
+ * ([TmdbBridge.buildIndianCoreFeeds] and
+ * [TmdbBridge.PROGRESSIVE_RAIL_DEFINITIONS]), so a title or key can never
+ * drift from its row. These definitions exist only so the Catalog Manager can
+ * list, reorder, hide and rename TMDB rows with the same saved
+ * [CatalogPreference] system as Stremio catalogs; they are never passed to
+ * [HomeCatalogDefinition.buildCatalogUrl] because TMDB rows are fetched by
+ * [TmdbBridge], not from an addon catalog URL.
+ */
+fun buildTmdbCatalogDefinitions(): List<HomeCatalogDefinition> {
+    val coreFeeds = TmdbBridge.buildIndianCoreFeeds(TmdbBridge.DEFAULT_API_KEY)
+        .map { feed -> feed.title to feed.url }
+    val allFeeds = coreFeeds + TmdbBridge.PROGRESSIVE_RAIL_DEFINITIONS
+    return allFeeds.map { (title, url) ->
+        val key = TmdbBridge.tmdbCatalogKey(title)
+        HomeCatalogDefinition(
+            key = key,
+            defaultTitle = title,
+            catalogName = title,
+            addonName = "TMDB",
+            manifestUrl = "",
+            type = if (url.contains("/discover/tv") || url.contains("/trending/tv")) "series" else "movie",
+            catalogId = key.removePrefix("tmdb:"),
+            supportsPagination = false
+        )
+    }.distinctBy { it.key }
+}
 
 fun buildSearchCatalogDefinitions(addons: List<ManagedAddon>): List<HomeCatalogDefinition> =
     addons.enabledAddons().mapNotNull { addon ->
