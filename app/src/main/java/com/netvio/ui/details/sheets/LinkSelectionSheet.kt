@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.PlayArrow
@@ -31,6 +33,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -259,13 +262,25 @@ fun LinkSelectionContent(
     val maxSheetHeight = (configuration.screenHeightDp * DownloadTokens.sheetMaxHeightRatio).dp
     val hasStreams = groups.any { it.streams.isNotEmpty() }
 
+    // Addon filter: null = "All" (every group); otherwise only that addon's
+    // links show (hero included). Session-only: nothing is persisted, so every
+    // sheet open starts on "All". If the selected addon disappears (refresh),
+    // the filter falls back to "All".
+    var selectedAddonId by remember { mutableStateOf<String?>(null) }
+    val effectiveFilter =
+        if (selectedAddonId != null && groups.any { it.addonId == selectedAddonId }) selectedAddonId else null
+    val filteredGroups = remember(groups, effectiveFilter) {
+        if (effectiveFilter == null) groups else groups.filter { it.addonId == effectiveFilter }
+    }
+
     // Best match: fast, reliable, buffer-free playback — NOT highest quality
     // (DownloadTokens.selectPlaybackBestMatch: direct or server-cached first,
-    // known size at most 4 GB, smallest file wins; no filter UI). The hero is
-    // lifted out of the grouped list and shown once as a card on top; the
-    // groups below keep their order, minus the hero.
-    val heroStream = remember(groups) {
-        DownloadTokens.selectPlaybackBestMatch(groups.flatMap { it.streams })
+    // known size at most 4 GB, smallest file wins). The hero is lifted out of
+    // the grouped list and shown once as a card on top; the groups below keep
+    // their order, minus the hero. When an addon filter is active, the hero is
+    // that addon's best match.
+    val heroStream = remember(filteredGroups) {
+        DownloadTokens.selectPlaybackBestMatch(filteredGroups.flatMap { it.streams })
     }
     val heroKey = remember(heroStream) {
         heroStream?.let { stream ->
@@ -274,11 +289,11 @@ fun LinkSelectionContent(
             "${stream.addonId}_${id}_${stream.quality.orEmpty()}"
         }
     }
-    val displayGroups = remember(groups, heroKey) {
+    val displayGroups = remember(filteredGroups, heroKey) {
         if (heroKey == null) {
-            groups
+            filteredGroups
         } else {
-            groups.mapNotNull { group ->
+            filteredGroups.mapNotNull { group ->
                 val rest = group.streams.filterNot { stream ->
                     val id = stream.playableDirectUrl ?: stream.effectiveMagnetOrHash ?: stream.url
                         ?: "${stream.name}_${stream.title}_${stream.size}"
@@ -332,6 +347,42 @@ fun LinkSelectionContent(
         }
 
         Spacer(modifier = Modifier.height(14.dp))
+
+        // Addon filter, pinned above the list: "All" plus one chip per addon.
+        // Tapping a chip shows only that addon's links (hero included); tapping
+        // the active chip again (or "All") shows everything. Hidden when there
+        // is only one addon — nothing to filter.
+        if (hasStreams && groups.size > 1) {
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 2.dp, bottom = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item(key = "link_filter_all") {
+                    AddonFilterChip(
+                        label = "All · ${groups.sumOf { it.streams.size }}",
+                        selected = effectiveFilter == null,
+                        onClickLabel = "Show all addons",
+                        onClick = { selectedAddonId = null }
+                    )
+                }
+                items(
+                    items = groups,
+                    key = { group -> "link_filter_${group.addonId}" }
+                ) { group ->
+                    AddonFilterChip(
+                        label = "${group.addonName} · ${group.streams.size}",
+                        selected = effectiveFilter == group.addonId,
+                        onClickLabel = "Show only ${group.addonName}",
+                        onClick = {
+                            selectedAddonId =
+                                if (effectiveFilter == group.addonId) null else group.addonId
+                        }
+                    )
+                }
+            }
+        }
 
         when {
             isLoading -> {
@@ -521,6 +572,41 @@ fun LinkSelectionContent(
                 }
             }
         }
+    }
+}
+
+/**
+ * One addon filter chip: "All · N" or "<Addon> · N". Same pill styling as the
+ * old addon chip row (white when selected, pressed surface otherwise), without
+ * the expand/collapse chevron — this chip filters, it does not expand.
+ */
+@Composable
+private fun AddonFilterChip(
+    label: String,
+    selected: Boolean,
+    onClickLabel: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (selected) Color.White else DownloadTokens.pressedSurface)
+            .pressable(onClickLabel = onClickLabel, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = TextStyle(
+                fontFamily = AppFontFamily,
+                fontWeight = FontWeight.Medium,
+                fontSize = 13.sp,
+                color = if (selected) Color(0xFF0B0B0F) else DownloadTokens.textPrimary
+            ),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
