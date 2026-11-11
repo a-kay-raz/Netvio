@@ -2074,50 +2074,6 @@ object TmdbBridge {
     }
 
     /**
-     * Over 35 diverse catalog rails for progressive infinite-scroll loading.
-     */
-    val PROGRESSIVE_RAIL_DEFINITIONS: List<Pair<String, String>> = listOf(
-        "Action & Adventure" to "$BASE_URL/discover/movie?with_genres=28,12&sort_by=popularity.desc",
-        "Sci-Fi Universes" to "$BASE_URL/discover/movie?with_genres=878&sort_by=popularity.desc",
-        "Mind-Bending Thrillers" to "$BASE_URL/discover/movie?with_genres=53&sort_by=vote_average.desc&vote_count.gte=500",
-        "Horror Nights" to "$BASE_URL/discover/movie?with_genres=27&sort_by=popularity.desc",
-        "Comedy Hits" to "$BASE_URL/discover/movie?with_genres=35&sort_by=popularity.desc",
-        "Animation Spotlight" to "$BASE_URL/discover/movie?with_genres=16&sort_by=popularity.desc",
-        "Crime Mysteries" to "$BASE_URL/discover/tv?with_genres=80,9648&sort_by=popularity.desc",
-        "Epic Fantasy & Magic" to "$BASE_URL/discover/movie?with_genres=14&sort_by=popularity.desc",
-        "Romantic Stories" to "$BASE_URL/discover/movie?with_genres=10749&sort_by=popularity.desc",
-        "Documentaries" to "$BASE_URL/discover/movie?with_genres=99&sort_by=popularity.desc",
-        "Korean Dramas & Cinema" to "$BASE_URL/discover/tv?with_original_language=ko&sort_by=popularity.desc",
-        "Anime Series" to "$BASE_URL/discover/tv?with_genres=16&with_original_language=ja&sort_by=popularity.desc",
-        "Japanese Cinema" to "$BASE_URL/discover/movie?with_original_language=ja&sort_by=popularity.desc",
-        "Bollywood & Indian Hits" to "$BASE_URL/discover/movie?with_original_language=hi&sort_by=popularity.desc",
-        "Spanish Cinema" to "$BASE_URL/discover/movie?with_original_language=es&sort_by=popularity.desc",
-        "French Cinema" to "$BASE_URL/discover/movie?with_original_language=fr&sort_by=popularity.desc",
-        "Sci-Fi & Fantasy TV" to "$BASE_URL/discover/tv?with_genres=10765&sort_by=popularity.desc",
-        "Action & Adventure TV" to "$BASE_URL/discover/tv?with_genres=10759&sort_by=popularity.desc",
-        "Drama Series" to "$BASE_URL/discover/tv?with_genres=18&sort_by=popularity.desc",
-        "Comedy TV Series" to "$BASE_URL/discover/tv?with_genres=35&sort_by=popularity.desc",
-        "Family Movie Night" to "$BASE_URL/discover/movie?with_genres=10751&sort_by=popularity.desc",
-        "War & Military" to "$BASE_URL/discover/movie?with_genres=10752&sort_by=popularity.desc",
-        "Historical Epics" to "$BASE_URL/discover/movie?with_genres=36&sort_by=popularity.desc",
-        "Musical & Dance" to "$BASE_URL/discover/movie?with_genres=10402&sort_by=popularity.desc",
-        "Western Classics" to "$BASE_URL/discover/movie?with_genres=37&sort_by=popularity.desc",
-        "Cyberpunk & Tech" to "$BASE_URL/discover/movie?with_keywords=4565|12190&sort_by=popularity.desc",
-        "Superheroes & Comics" to "$BASE_URL/discover/movie?with_keywords=9715|180547&sort_by=popularity.desc",
-        "Post-Apocalyptic Survival" to "$BASE_URL/discover/movie?with_keywords=4458|2853&sort_by=popularity.desc",
-        "Space Exploration" to "$BASE_URL/discover/movie?with_keywords=9882|3804&sort_by=popularity.desc",
-        "Heist & Con Artists" to "$BASE_URL/discover/movie?with_keywords=10051|9717&sort_by=popularity.desc",
-        "Martial Arts Legends" to "$BASE_URL/discover/movie?with_keywords=780|9663&sort_by=popularity.desc",
-        "Time Travel" to "$BASE_URL/discover/movie?with_keywords=4379&sort_by=popularity.desc",
-        "Vampires & Werewolves" to "$BASE_URL/discover/movie?with_keywords=3133|12564&sort_by=popularity.desc",
-        "Coming of Age" to "$BASE_URL/discover/movie?with_keywords=10683|207317&sort_by=popularity.desc",
-        "A24 Indie Spotlight" to "$BASE_URL/discover/movie?with_companies=41077&sort_by=popularity.desc",
-        "Critically Acclaimed" to "$BASE_URL/discover/movie?sort_by=vote_average.desc&vote_count.gte=2000",
-        "Blockbuster Legends" to "$BASE_URL/discover/movie?sort_by=revenue.desc",
-        "Hidden Gems" to "$BASE_URL/discover/movie?vote_average.gte=7.8&vote_count.gte=200&vote_count.lte=1500&sort_by=popularity.desc"
-    )
-
-    /**
      * Model representing a catalog rail feed definition supporting AccentBar, RuleLine, and Eyebrow styles.
      * Contains clean title (strictly no brackets), target URL, logo resolution flag, uppercase eyebrow, and subtitle.
      */
@@ -2128,29 +2084,6 @@ object TmdbBridge {
         val eyebrow: String? = null,
         val subtitle: String? = null
     )
-
-    private fun deriveProgressiveEyebrow(title: String): String {
-        return when {
-            title.contains("Action", ignoreCase = true) -> "ACTION"
-            title.contains("Sci-Fi", ignoreCase = true) -> "SCI-FI"
-            title.contains("Thriller", ignoreCase = true) -> "THRILLER"
-            title.contains("Horror", ignoreCase = true) -> "HORROR"
-            title.contains("Comedy", ignoreCase = true) -> "COMEDY"
-            title.contains("Animation", ignoreCase = true) || title.contains("Anime", ignoreCase = true) -> "ANIMATION"
-            title.contains("Crime", ignoreCase = true) -> "CRIME"
-            title.contains("Fantasy", ignoreCase = true) -> "FANTASY"
-            title.contains("Romantic", ignoreCase = true) -> "ROMANCE"
-            title.contains("Docu", ignoreCase = true) -> "DOCUMENTARY"
-            title.contains("Drama", ignoreCase = true) -> "DRAMA"
-            title.contains("War", ignoreCase = true) -> "WAR"
-            title.contains("Western", ignoreCase = true) -> "WESTERN"
-            title.contains("Cyberpunk", ignoreCase = true) -> "CYBERPUNK"
-            title.contains("Superhero", ignoreCase = true) -> "HEROES"
-            title.contains("Critically", ignoreCase = true) || title.contains("Acclaimed", ignoreCase = true) -> "TOP RATED"
-            title.contains("Hidden Gems", ignoreCase = true) -> "SPOTLIGHT"
-            else -> "CURATED"
-        }
-    }
 
     /**
      * Builds the stable catalog key for a TMDB home row from its title.
@@ -2168,18 +2101,6 @@ object TmdbBridge {
     }
 
     /**
-     * Catalog keys of the 38 progressive discovery rails
-     * ([PROGRESSIVE_RAIL_DEFINITIONS]). Progressive rails are off Home by
-     * default (see [com.euthopiar.core.addons.defaultCatalogOnHome]) so a
-     * fresh install shows only the Pan-India core feeds plus enabled Stremio
-     * catalogs; the rails stay listed in the Catalog Manager under Not on
-     * Home and can be enabled from there.
-     */
-    val PROGRESSIVE_RAIL_KEYS: Set<String> by lazy {
-        PROGRESSIVE_RAIL_DEFINITIONS.map { (title, _) -> tmdbCatalogKey(title) }.toSet()
-    }
-
-    /**
      * Builds the Pan-India core feeds for the home catalog: the only default
      * feed set. Guaranteed zero brackets in any header title. Configured with
      * eyebrow and subtitle to seamlessly support all three header styles
@@ -2193,6 +2114,7 @@ object TmdbBridge {
         val allIndiaLangs = "hi|te|ta|ml|kn|bn|mr|pa"
         feeds.add(FeedDef("Trending in India", appendApiKey("$BASE_URL/discover/movie?with_original_language=$allIndiaLangs&region=IN&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = true, eyebrow = "SPOTLIGHT", subtitle = "Pan-India trending releases"))
         feeds.add(FeedDef("Bollywood Hits", appendApiKey("$BASE_URL/discover/movie?with_original_language=hi&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "BOLLYWOOD", subtitle = "Bollywood & Hindi blockbusters"))
+        feeds.add(FeedDef("Bollywood & Indian Hits", appendApiKey("$BASE_URL/discover/movie?with_original_language=hi&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "BOLLYWOOD", subtitle = "Hindi blockbusters & Indian hits"))
         feeds.add(FeedDef("Telugu Blockbusters", appendApiKey("$BASE_URL/discover/movie?with_original_language=te&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "TOLLYWOOD", subtitle = "Top Telugu cinema & action hits"))
         feeds.add(FeedDef("Tamil Cinema", appendApiKey("$BASE_URL/discover/movie?with_original_language=ta&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "KOLLYWOOD", subtitle = "Kollywood blockbusters & stories"))
         feeds.add(FeedDef("Malayalam Cinema", appendApiKey("$BASE_URL/discover/movie?with_original_language=ml&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "MOLLYWOOD", subtitle = "Critically acclaimed Malayalam cinema"))
@@ -2227,13 +2149,7 @@ object TmdbBridge {
         }
 
         val coreFeeds = buildIndianCoreFeeds(apiKey)
-
-        val discoverFeeds = PROGRESSIVE_RAIL_DEFINITIONS.map { (title, url) ->
-            val fullUrl = appendApiKey(url, apiKey)
-            val eyebrow = deriveProgressiveEyebrow(title)
-            FeedDef(title = title, url = fullUrl, resolveLogos = false, eyebrow = eyebrow, subtitle = null)
-        }
-        val allFeeds: List<FeedDef> = coreFeeds + discoverFeeds
+        val allFeeds: List<FeedDef> = coreFeeds
 
         val result = try {
             coroutineScope {
@@ -2261,38 +2177,6 @@ object TmdbBridge {
             cachedHomeCatalog["india"] = Pair(now, result)
         }
         result
-    }
-
-    /**
-     * Progressively fetches a batch of extra catalog rails without impacting the initial load time.
-     */
-    suspend fun fetchProgressiveRails(
-        client: OkHttpClient,
-        offset: Int,
-        limit: Int = 4,
-        apiKey: String = DEFAULT_API_KEY
-    ): List<CatalogRow> = withContext(Dispatchers.IO) {
-        val targets = PROGRESSIVE_RAIL_DEFINITIONS.drop(offset).take(limit)
-        if (targets.isEmpty()) return@withContext emptyList()
-        coroutineScope {
-            targets.map { (title, url) ->
-                async {
-                    val fullUrl = appendApiKey(url, apiKey)
-                    val eyebrow = deriveProgressiveEyebrow(title)
-                    fetchCatalogRow(
-                        client = client,
-                        title = title,
-                        url = fullUrl,
-                        providerName = "tmdb",
-                        resolveLogos = false,
-                        apiKey = apiKey,
-                        eyebrow = eyebrow,
-                        subtitle = null,
-                        catalogKey = tmdbCatalogKey(title)
-                    )
-                }
-            }.awaitAll().filterNotNull()
-        }
     }
 
     /**

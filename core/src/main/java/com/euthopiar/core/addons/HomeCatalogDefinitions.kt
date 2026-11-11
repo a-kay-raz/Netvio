@@ -64,21 +64,20 @@ fun buildHomeCatalogDefinitions(addons: List<ManagedAddon>): List<HomeCatalogDef
     }.distinctBy { it.key }
 
 /**
- * Builds one [HomeCatalogDefinition] per built-in TMDB home row: the 16
- * Pan-India core feeds plus the 38 progressive rails. Derived from the same
- * feed lists the rows themselves are built from
- * ([TmdbBridge.buildIndianCoreFeeds] and
- * [TmdbBridge.PROGRESSIVE_RAIL_DEFINITIONS]), so a title or key can never
- * drift from its row. These definitions exist only so the Catalog Manager can
- * list, reorder, hide and rename TMDB rows with the same saved
- * [CatalogPreference] system as Stremio catalogs; they are never passed to
- * [HomeCatalogDefinition.buildCatalogUrl] because TMDB rows are fetched by
- * [TmdbBridge], not from an addon catalog URL.
+ * Builds one [HomeCatalogDefinition] per built-in TMDB home row: the 17
+ * Pan-India core feeds. Derived from the same feed list the rows
+ * themselves are built from ([TmdbBridge.buildIndianCoreFeeds]), so a
+ * title or key can never drift from its row. These definitions exist only
+ * so the Catalog Manager can list, reorder, hide and rename TMDB rows
+ * with the same saved [CatalogPreference] system as Stremio catalogs;
+ * they are never passed to [HomeCatalogDefinition.buildCatalogUrl]
+ * because TMDB rows are fetched by [TmdbBridge], not from an addon
+ * catalog URL.
  */
 fun buildTmdbCatalogDefinitions(): List<HomeCatalogDefinition> {
     val coreFeeds = TmdbBridge.buildIndianCoreFeeds(TmdbBridge.DEFAULT_API_KEY)
         .map { feed -> feed.title to feed.url }
-    val allFeeds = coreFeeds + TmdbBridge.PROGRESSIVE_RAIL_DEFINITIONS
+    val allFeeds = coreFeeds
     return allFeeds.map { (title, url) ->
         val key = TmdbBridge.tmdbCatalogKey(title)
         HomeCatalogDefinition(

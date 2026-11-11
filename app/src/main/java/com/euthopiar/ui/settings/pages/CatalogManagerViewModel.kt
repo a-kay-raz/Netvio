@@ -5,7 +5,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.euthopiar.core.addons.CatalogPreference
 import com.euthopiar.core.addons.HomeCatalogDefinition
-import com.euthopiar.core.addons.defaultCatalogOnHome
 import com.euthopiar.core.repository.ProviderRepository
 import com.euthopiar.data.preferences.PreferencesRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -108,7 +107,7 @@ class CatalogManagerViewModel(application: Application) : AndroidViewModel(appli
             val preference = preferences[definition.key]
             CatalogManagerItem(
                 definition = definition,
-                onHome = preference?.onHome ?: defaultCatalogOnHome(definition.key),
+                onHome = preference?.onHome ?: true,
                 orderIndex = preference?.orderIndex ?: Int.MAX_VALUE,
                 customTitle = preference?.customTitle
             )
@@ -177,7 +176,7 @@ class CatalogManagerViewModel(application: Application) : AndroidViewModel(appli
             val existing = saved[catalogKey]
             saved[catalogKey] = CatalogPreference(
                 catalogKey = catalogKey,
-                onHome = existing?.onHome ?: defaultCatalogOnHome(catalogKey),
+                onHome = existing?.onHome ?: true,
                 orderIndex = existing?.orderIndex ?: Int.MAX_VALUE,
                 customTitle = newTitle.trim().takeIf { it.isNotEmpty() }
             )

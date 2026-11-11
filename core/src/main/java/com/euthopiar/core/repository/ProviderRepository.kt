@@ -29,9 +29,7 @@ open class ProviderRepository(
     /**
      * Saved catalog preferences supplied by the app module (see
      * [CatalogPreferenceProvider]). Null means no preferences were saved yet,
-     * in which case catalogs use their defaults
-     * ([defaultCatalogOnHome]): core Indian feeds and Stremio catalogs on
-     * Home, progressive TMDB rails off Home.
+     * in which case every catalog defaults to on Home.
      */
     var catalogPreferenceProvider: CatalogPreferenceProvider? = null
 
@@ -54,8 +52,8 @@ open class ProviderRepository(
     }
 
     /**
-     * Returns one definition per built-in TMDB home row (Pan-India core feeds
-     * plus progressive rails). Used by the Catalog Manager alongside
+     * Returns one definition per built-in TMDB home row (the 17 Pan-India
+     * core feeds). Used by the Catalog Manager alongside
      * [getCatalogDefinitions]; unlike the home rails this is not filtered by
      * saved visibility. TMDB definitions are never used to fetch anything —
      * TMDB rows come from [TmdbBridge].
@@ -69,12 +67,10 @@ open class ProviderRepository(
      * the user hid from Home, renames rows the user renamed, and stable-sorts
      * keyed rows by their saved order. Rows without a saved order keep their
      * fetch order (Int.MAX_VALUE default), and rows without a key are never
-     * reordered. Rows with no saved preference use their default visibility
-     * ([defaultCatalogOnHome]), so progressive TMDB rails stay off Home
-     * until the user enables them. The sort is stable, so equal order values
-     * never shuffle the fetch order. Shared by [getHomeCatalog] and
-     * [getProgressiveHomeRails] so TMDB and Stremio rows follow exactly the
-     * same rules.
+     * reordered. Rows with no saved preference default to on Home. The sort
+     * is stable, so equal order values never shuffle the fetch order.
+     * Shared by [getHomeCatalog] and [getProgressiveHomeRails] so TMDB and
+     * Stremio rows follow exactly the same rules.
      */
     private fun applyCatalogPreferences(
         rows: List<CatalogRow>,
@@ -82,7 +78,7 @@ open class ProviderRepository(
     ): List<CatalogRow> {
         val visible = rows.filter { row ->
             val key = row.catalogKey ?: return@filter true
-            preferences[key]?.onHome ?: defaultCatalogOnHome(key)
+            preferences[key]?.onHome ?: true
         }
         val renamed = visible.map { row ->
             val key = row.catalogKey
@@ -136,60 +132,21 @@ open class ProviderRepository(
     }
 
     /**
-     * Progressively loads batches of extra catalog rails for smooth infinite-scrolling.
-     * Supports both progressive TMDB genres and Stremio catalog pagination.
-     * Hidden TMDB rails are skipped inside the loop: successive TMDB batches
-     * are fetched until [limit] visible rows are collected or the TMDB rails
-     * are exhausted, so hiding rails cannot end loading early. Only then does
-     * loading fall back to Stremio rails. The offset contract is preserved:
-     * TMDB rails first, Stremio after offset 38.
+     * Progressively loads batches of extra Stremio catalog rails for smooth
+     * infinite-scrolling. All TMDB rows already load with the initial home
+     * catalog, so only Stremio catalogs paginate here. The offset contract:
+     * [getHomeCatalog] loads the first 6 Stremio rails, so a progressive
+     * offset of 0 continues at Stremio rail 6 ([6 + offset]). An empty
+     * batch means no more rails remain.
      */
     suspend fun getProgressiveHomeRails(offset: Int, limit: Int = 4): List<CatalogRow> = withContext(Dispatchers.IO) {
         val preferences = readCatalogPreferences()
-        val visible = mutableListOf<CatalogRow>()
-        var tmdbOffset = offset
-        val tmdbRailCount = TmdbBridge.PROGRESSIVE_RAIL_DEFINITIONS.size
-        while (visible.size < limit && tmdbOffset < tmdbRailCount) {
-            // Skip rails that are hidden (or off Home by default) without
-            // fetching them: hidden rails cost no network and never count
-            // toward the batch. The offset still advances past them, so the
-            // offset contract is unchanged.
-            while (tmdbOffset < tmdbRailCount) {
-                val railKey = TmdbBridge.tmdbCatalogKey(TmdbBridge.PROGRESSIVE_RAIL_DEFINITIONS[tmdbOffset].first)
-                if (preferences[railKey]?.onHome ?: defaultCatalogOnHome(railKey)) break
-                tmdbOffset++
-            }
-            if (tmdbOffset >= tmdbRailCount) break
-            val take = minOf(limit - visible.size, tmdbRailCount - tmdbOffset)
-            val batch = try {
-                TmdbBridge.fetchProgressiveRails(DohDns.metadataClient, tmdbOffset, take)
-            } catch (_: Exception) {
-                emptyList<CatalogRow>()
-            }
-            // Advance by the number of rail definitions attempted, not by the
-            // number of rows returned, so a failed fetch never re-fetches the
-            // same window forever.
-            tmdbOffset += take
-            if (batch.isNotEmpty()) {
-                visible += applyCatalogPreferences(batch, preferences)
-            }
-        }
-
-        if (visible.size < limit) {
-            // TMDB rails exhausted (or too few visible): fall back to Stremio
-            // catalog rails, topping the batch up to [limit] rows.
-            val stremioOffset = 6 + (offset - 38).coerceAtLeast(0)
-            val stremioRails = fetchStremioCatalogRails(offset = stremioOffset, limit = limit - visible.size)
-            if (stremioRails.isNotEmpty()) {
-                visible += stremioRails
-            }
-        }
-
-        if (visible.isNotEmpty()) {
-            applyCatalogPreferences(visible, preferences)
-        } else {
-            emptyList()
-        }
+        // Initial Home took Stremio rails 0..5, so progressive loading
+        // continues at 6 + offset over the user-ordered visible catalogs.
+        val stremioOffset = 6 + offset
+        val stremioRails = fetchStremioCatalogRails(offset = stremioOffset, limit = limit)
+        if (stremioRails.isEmpty()) return@withContext emptyList()
+        applyCatalogPreferences(stremioRails, preferences)
     }
 
     private suspend fun fetchStremioCatalogRails(offset: Int, limit: Int): List<CatalogRow> = withContext(Dispatchers.IO) {
@@ -202,7 +159,7 @@ open class ProviderRepository(
         // the drop/take window follows the user-ordered list, so progressive
         // loading continues exactly where the first batch stopped.
         val targetDefs = orderedDefs
-            .filter { preferences[it.key]?.onHome ?: defaultCatalogOnHome(it.key) }
+            .filter { preferences[it.key]?.onHome ?: true }
             .drop(offset).take(limit)
         if (targetDefs.isEmpty()) return@withContext emptyList()
 

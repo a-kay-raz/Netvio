@@ -479,7 +479,7 @@ class HomeViewModel(
                 val combinedSeed = (providerHash * 37L) xor (sessionIdx * 10007L)
                 val providerRandom = kotlin.random.Random(combinedSeed)
 
-                // 3. Select hero candidates from the top visible TMDB rows so they never get diluted by progressive rails or Stremio rows.
+                // 3. Select hero candidates from the top visible TMDB rows so they never get diluted by Stremio rows.
                 // Hidden TMDB rows never reach this ViewModel (the repository
                 // filters them), so when no TMDB row is visible the hero falls
                 // back to all rows; when nothing is visible the hero is empty.
