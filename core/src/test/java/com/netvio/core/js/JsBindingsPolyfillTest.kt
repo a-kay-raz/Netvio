@@ -58,7 +58,7 @@ class JsBindingsPolyfillTest {
         val output = evaluateJs(script)
         val json = kotlinx.serialization.json.Json.parseToJsonElement(output)
         val obj = json as kotlinx.serialization.json.JsonObject
-        assertEquals("SGVsbG8gRXV0aG9waWFyIEVuZ2luZSE=", (obj["b64"] as kotlinx.serialization.json.JsonPrimitive).content)
+        assertEquals("SGVsbG8gTmV0dmlvIEVuZ2luZSE=", (obj["b64"] as kotlinx.serialization.json.JsonPrimitive).content)
         assertEquals("Hello Netvio Engine!", (obj["roundTrip"] as kotlinx.serialization.json.JsonPrimitive).content)
         assertEquals(true, (obj["isBuf"] as kotlinx.serialization.json.JsonPrimitive).content.toBoolean())
     }
