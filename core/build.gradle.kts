@@ -16,7 +16,7 @@ val localProperties = Properties().apply {
 }
 
 android {
-    namespace = "com.euthopiar.core"
+    namespace = "com.netvio.core"
     compileSdk = 36
 
     defaultConfig {

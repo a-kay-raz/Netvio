@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Euthopiar" parent="@android:style/Theme.Material.NoActionBar">
+    <style name="Theme.Netvio" parent="@android:style/Theme.Material.NoActionBar">
         <!-- Cold start background: Pure Velvet Black (#0A0C0F) -->
         <item name="android:windowBackground">@color/velvet_black</item>
         <item name="android:colorBackground">@color/velvet_black</item>

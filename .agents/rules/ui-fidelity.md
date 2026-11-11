@@ -5,7 +5,7 @@ always_on: true
 
 # UI/UX High-Fidelity Design Craft Rules
 
-Every UI change, addition, refactor, or polish in Euthopiar must consult and strictly align with the 3 locked-in UI design skills located in `.agents/skills/`:
+Every UI change, addition, refactor, or polish in Netvio must consult and strictly align with the 3 locked-in UI design skills located in `.agents/skills/`:
 
 ## 1. Emil Kowalski Principles (`.agents/skills/emil-design-eng/`, `.agents/skills/animate/`, `.agents/skills/mobile-native/`)
 - **Physics-Based Motion**: Always use Jetpack Compose springs (`spring(dampingRatio, stiffness)`) for natural handoffs, critical damping, and physical elasticity.

@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.euthopiar"
+    namespace = "com.netvio"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.euthopiar"
+        applicationId = "com.netvio"
         minSdk = 26
         targetSdk = 35
         versionCode = 11
