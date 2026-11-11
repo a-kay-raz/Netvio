@@ -35,12 +35,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -253,6 +259,35 @@ fun LinkSelectionContent(
     val maxSheetHeight = (configuration.screenHeightDp * DownloadTokens.sheetMaxHeightRatio).dp
     val hasStreams = groups.any { it.streams.isNotEmpty() }
 
+    // Best match: same ranking rule as the Downloads sheet
+    // (DownloadTokens.rankAndPartitionStreams — highest-seed torrent, else
+    // first direct). The hero is lifted out of the grouped list and shown once
+    // as a card on top; the groups below keep their order, minus the hero.
+    val heroStream = remember(groups) {
+        DownloadTokens.rankAndPartitionStreams(groups.flatMap { it.streams }).hero
+    }
+    val heroKey = remember(heroStream) {
+        heroStream?.let { stream ->
+            val id = stream.playableDirectUrl ?: stream.effectiveMagnetOrHash ?: stream.url
+                ?: "${stream.name}_${stream.title}_${stream.size}"
+            "${stream.addonId}_${id}_${stream.quality.orEmpty()}"
+        }
+    }
+    val displayGroups = remember(groups, heroKey) {
+        if (heroKey == null) {
+            groups
+        } else {
+            groups.mapNotNull { group ->
+                val rest = group.streams.filterNot { stream ->
+                    val id = stream.playableDirectUrl ?: stream.effectiveMagnetOrHash ?: stream.url
+                        ?: "${stream.name}_${stream.title}_${stream.size}"
+                    "${stream.addonId}_${id}_${stream.quality.orEmpty()}" == heroKey
+                }
+                if (rest.isEmpty()) null else group.copy(streams = rest)
+            }
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -406,7 +441,19 @@ fun LinkSelectionContent(
             }
             else -> {
                 LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                    groups.forEach { group ->
+                    // Best match hero card on top, same as the Downloads sheet.
+                    if (heroStream != null) {
+                        item(key = "link_hero_slot") {
+                            LinkHeroCard(
+                                stream = heroStream,
+                                onPlayClick = { onStreamSelected(heroStream) },
+                                onLongClick = onLongClick?.let { { it(heroStream) } }
+                            )
+                            Spacer(modifier = Modifier.height(DownloadTokens.heroGapBottom))
+                        }
+                    }
+
+                    displayGroups.forEach { group ->
                         item(key = "link_group_header_${group.addonId}") {
                             Text(
                                 text = "${group.addonName} · ${group.streams.size}",
@@ -473,6 +520,229 @@ fun LinkSelectionContent(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Best-match hero card for the stream picker: the same white editorial card as
+ * the Downloads sheet (same ranking rule, same tokens), but the black pill
+ * plays the stream instead of downloading it. Long-press copies the link,
+ * like the rows below.
+ */
+@Composable
+private fun LinkHeroCard(
+    stream: StreamItem,
+    onPlayClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val density = LocalDensity.current
+    val fontScale = density.fontScale
+    val sizeNumeralSp = if (fontScale > 1.15f) 42.sp else 58.sp
+    val seedsNumeralSp = if (fontScale > 1.15f) 22.sp else 28.sp
+
+    val parsedSize = remember(stream.size) {
+        DownloadTokens.parseStreamSize(stream.size)
+    }
+    val sourceLabel = stream.sourceName?.takeIf { it.isNotBlank() } ?: stream.addonName
+    val accessibilityLabel = "Best match: " + DownloadTokens.getStreamAccessibilityDescription(
+        stream = stream,
+        displaySize = "${parsedSize.formattedNumeral} ${parsedSize.unit}"
+    )
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(DownloadTokens.heroCornerRadius))
+            .background(DownloadTokens.heroSurface)
+            .padding(
+                horizontal = DownloadTokens.heroPaddingHorizontal,
+                vertical = DownloadTokens.heroPaddingVertical
+            )
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Top row: "Best match" & resolution (Direct) or source name (P2P)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Best match",
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Normal,
+                        fontSize = 12.sp,
+                        color = DownloadTokens.onHero
+                    )
+                )
+                if (stream.isTorrentStream) {
+                    Text(
+                        text = sourceLabel,
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Normal,
+                            fontSize = 12.sp,
+                            color = DownloadTokens.textMuted
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                } else {
+                    val res = DownloadTokens.extractResolution(stream.quality, stream.name ?: stream.title) ?: stream.quality
+                    if (!res.isNullOrBlank()) {
+                        Text(
+                            text = res,
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontWeight = FontWeight.Normal,
+                                fontSize = 12.sp,
+                                color = DownloadTokens.textMuted
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Middle row: size numeral + unit, and seeds count or "Direct"
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        text = parsedSize.formattedNumeral,
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = sizeNumeralSp,
+                            lineHeight = sizeNumeralSp,
+                            letterSpacing = (-0.04).em,
+                            fontFeatureSettings = "tnum",
+                            color = DownloadTokens.onHero
+                        ),
+                        modifier = Modifier.alignByBaseline()
+                    )
+                    Text(
+                        text = parsedSize.unit,
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Normal,
+                            fontSize = 15.sp,
+                            color = DownloadTokens.textMuted
+                        ),
+                        modifier = Modifier
+                            .padding(start = 3.dp)
+                            .alignByBaseline()
+                    )
+                }
+
+                if (stream.isTorrentStream) {
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = (stream.seeders ?: 0).toString(),
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = seedsNumeralSp,
+                                lineHeight = seedsNumeralSp,
+                                letterSpacing = (-0.04).em,
+                                fontFeatureSettings = "tnum",
+                                color = DownloadTokens.accentCrimson
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "seeds",
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontWeight = FontWeight.Normal,
+                                fontSize = 11.sp,
+                                color = DownloadTokens.textMuted
+                            )
+                        )
+                    }
+                } else {
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = "Direct",
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = seedsNumeralSp,
+                                lineHeight = seedsNumeralSp,
+                                letterSpacing = (-0.04).em,
+                                fontFeatureSettings = "tnum",
+                                color = DownloadTokens.onHero
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = sourceLabel,
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontWeight = FontWeight.Normal,
+                                fontSize = 11.sp,
+                                color = DownloadTokens.textMuted
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            // Play pill
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(DownloadTokens.pillHeight)
+                    .clip(RoundedCornerShape(DownloadTokens.pillCornerRadius))
+                    .background(DownloadTokens.onHero)
+                    .pressable(onClick = onPlayClick, onLongClick = onLongClick)
+                    .semantics {
+                        this.role = Role.Button
+                        this.contentDescription = accessibilityLabel
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.PlayArrow,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Play",
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp,
+                            color = Color.White
+                        ),
+                        maxLines = 1
+                    )
                 }
             }
         }
