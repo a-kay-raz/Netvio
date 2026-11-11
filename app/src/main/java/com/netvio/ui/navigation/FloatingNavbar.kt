@@ -206,8 +206,9 @@ fun FloatingNavbar(
             NavbarStyle.FLOATING -> {
                 Modifier
                     .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = Dimens.spacing12)
-                    .widthIn(min = 280.dp, max = 328.dp)
+                    .padding(vertical = Dimens.spacing12)
+                    .fillMaxWidth(0.6f)
+                    .widthIn(max = 328.dp)
                     .shadow(
                         elevation = 16.dp,
                         shape = shape,
