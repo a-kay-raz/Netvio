@@ -40,7 +40,6 @@ class SettingsPagesOverhaulTest {
         assertEquals("Appearance", SettingsPage.Appearance.title)
         assertEquals("Integrations", SettingsPage.Integrations.title)
         assertEquals("Storage & cache", SettingsPage.Storage.title)
-        assertEquals("About Euthopiar", SettingsPage.About.title)
     }
 
     @Test
@@ -49,7 +48,6 @@ class SettingsPagesOverhaulTest {
         assertEquals(SettingsCategory.General, SettingsPage.Appearance.category)
         assertEquals(SettingsCategory.Ecosystem, SettingsPage.Integrations.category)
         assertEquals(SettingsCategory.Advanced, SettingsPage.Storage.category)
-        assertEquals(SettingsCategory.About, SettingsPage.About.category)
     }
 
     @Test

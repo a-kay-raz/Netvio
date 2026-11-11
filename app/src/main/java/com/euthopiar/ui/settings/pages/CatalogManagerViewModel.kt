@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.euthopiar.core.addons.CatalogPreference
 import com.euthopiar.core.addons.HomeCatalogDefinition
+import com.euthopiar.core.addons.defaultCatalogOnHome
 import com.euthopiar.core.repository.ProviderRepository
 import com.euthopiar.data.preferences.PreferencesRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -88,12 +89,10 @@ class CatalogManagerViewModel(application: Application) : AndroidViewModel(appli
                 // (feed renamed later) is pruned here by the known-keys check.
                 val definitions = repository.getTmdbCatalogDefinitions() + repository.getCatalogDefinitions()
                 _definitions.value = definitions
-                val knownKeys = definitions.map { it.key }.toSet()
                 val current = preferencesRepository.getCatalogPreferences()
-                if (current.keys.any { it !in knownKeys }) {
-                    preferencesRepository.saveCatalogPreferences(
-                        current.filterKeys { it in knownKeys }
-                    )
+                val pruned = prune(current)
+                if (pruned.keys != current.keys) {
+                    preferencesRepository.saveCatalogPreferences(pruned)
                 }
                 rebuild(preferencesRepository.getCatalogPreferences())
             } catch (_: Exception) {
@@ -109,16 +108,26 @@ class CatalogManagerViewModel(application: Application) : AndroidViewModel(appli
             val preference = preferences[definition.key]
             CatalogManagerItem(
                 definition = definition,
-                onHome = preference?.onHome ?: true,
+                onHome = preference?.onHome ?: defaultCatalogOnHome(definition.key),
                 orderIndex = preference?.orderIndex ?: Int.MAX_VALUE,
                 customTitle = preference?.customTitle
             )
         }
     }
 
+    /**
+     * Drops saved preferences for catalogs that no longer exist. Only TMDB
+     * keys are ever dropped: TMDB definitions are built deterministically
+     * from the feed lists, so a TMDB key missing here is genuinely gone.
+     * Stremio keys are kept unconditionally because the addon list can be
+     * partial when a manifest refresh fails, and dropping then would
+     * silently delete the user's saved order, visibility and rename for
+     * that addon. When definitions have not loaded yet nothing is pruned.
+     */
     private fun prune(preferences: Map<String, CatalogPreference>): Map<String, CatalogPreference> {
         val knownKeys = _definitions.value.map { it.key }.toSet()
-        return preferences.filterKeys { it in knownKeys }
+        if (knownKeys.isEmpty()) return preferences
+        return preferences.filterKeys { key -> !key.startsWith("tmdb:") || key in knownKeys }
     }
 
     /** Moves a Home catalog one step up (direction = -1) or down (+1). */
@@ -147,12 +156,10 @@ class CatalogManagerViewModel(application: Application) : AndroidViewModel(appli
         viewModelScope.launch {
             val saved = preferencesRepository.getCatalogPreferences().toMutableMap()
             val existing = saved[catalogKey]
-            val orderIndex = if (onHome) {
-                existing?.orderIndex?.takeIf { it != Int.MAX_VALUE }
-                    ?: ((saved.values.filter { it.onHome }.maxOfOrNull { it.orderIndex } ?: -1) + 1)
-            } else {
-                existing?.orderIndex ?: Int.MAX_VALUE
-            }
+            // Keep the row's saved position when it has one; otherwise leave
+            // it unordered (Int.MAX_VALUE) so it keeps its natural place on
+            // Home instead of jumping to the top.
+            val orderIndex = existing?.orderIndex ?: Int.MAX_VALUE
             saved[catalogKey] = CatalogPreference(
                 catalogKey = catalogKey,
                 onHome = onHome,
@@ -170,7 +177,7 @@ class CatalogManagerViewModel(application: Application) : AndroidViewModel(appli
             val existing = saved[catalogKey]
             saved[catalogKey] = CatalogPreference(
                 catalogKey = catalogKey,
-                onHome = existing?.onHome ?: true,
+                onHome = existing?.onHome ?: defaultCatalogOnHome(catalogKey),
                 orderIndex = existing?.orderIndex ?: Int.MAX_VALUE,
                 customTitle = newTitle.trim().takeIf { it.isNotEmpty() }
             )

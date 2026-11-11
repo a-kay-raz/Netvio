@@ -151,8 +151,7 @@ class PreferencesRepository private constructor(private val context: Context) {
         val SKIPPED_UPDATE_VERSION = stringPreferencesKey("skipped_update_version")
         val LAST_UPDATE_CHECK_TIMESTAMP = longPreferencesKey("last_update_check_timestamp")
 
-        // 1.5 Support & Donation Preferences
-        val LAST_DONATION_PROMPT_TIMESTAMP = longPreferencesKey("last_donation_prompt_timestamp")
+        // 1.5 App Version Preferences
         val LAST_APP_VERSION = stringPreferencesKey("last_app_version")
         val LAST_APP_VERSION_CODE = intPreferencesKey("last_app_version_code")
         val WALKTHROUGH_COMPLETED_VERSION = stringPreferencesKey("walkthrough_completed_version")
@@ -1057,21 +1056,6 @@ class PreferencesRepository private constructor(private val context: Context) {
     suspend fun setLastUpdateCheckTimestamp(timestampMs: Long) {
         context.preferencesDataStore.edit { preferences ->
             preferences[PreferencesKeys.LAST_UPDATE_CHECK_TIMESTAMP] = timestampMs
-        }
-    }
-
-    val lastDonationPromptTimestamp: Flow<Long> = context.preferencesDataStore.data
-        .catch { exception ->
-            if (exception is IOException) emit(emptyPreferences()) else throw exception
-        }
-        .map { preferences ->
-            preferences[PreferencesKeys.LAST_DONATION_PROMPT_TIMESTAMP] ?: 0L
-        }
-        .distinctUntilChanged()
-
-    suspend fun setLastDonationPromptTimestamp(timestampMs: Long) {
-        context.preferencesDataStore.edit { preferences ->
-            preferences[PreferencesKeys.LAST_DONATION_PROMPT_TIMESTAMP] = timestampMs
         }
     }
 

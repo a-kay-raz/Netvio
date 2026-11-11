@@ -127,7 +127,6 @@ class ConfigurationBackupManager(private val context: Context) {
 
             // Long preferences
             "last_update_check_timestamp" to KeyType.LONG,
-            "last_donation_prompt_timestamp" to KeyType.LONG,
 
             // StringSet preferences
             "repository_urls" to KeyType.STRING_SET,

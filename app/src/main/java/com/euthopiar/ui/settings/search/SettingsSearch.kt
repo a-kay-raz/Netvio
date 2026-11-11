@@ -267,53 +267,6 @@ fun getAllSettingsSearchEntries(): List<SettingsSearchEntry> = listOf(
         keywords = listOf("backup", "export", "import", "restore", "json"),
         icon = Icons.Outlined.FileDownload
     ),
-
-    // About
-    SettingsSearchEntry(
-        id = "app_updates",
-        title = "Application Updates",
-        description = "Check for new GitHub releases, view changelog and install APK updates",
-        category = SettingsCategory.About,
-        page = SettingsPage.Updates,
-        keywords = listOf("update", "upgrade", "version", "github", "release", "apk", "changelog"),
-        icon = Icons.Outlined.SystemUpdateAlt
-    ),
-    SettingsSearchEntry(
-        id = "about_euthopiar",
-        title = "About Euthopiar",
-        description = "App version, open-source licenses, GitHub repository and acknowledgments",
-        category = SettingsCategory.About,
-        page = SettingsPage.About,
-        keywords = listOf("about", "version", "licenses", "github", "euthopiar"),
-        icon = Icons.Outlined.Info
-    ),
-    SettingsSearchEntry(
-        id = "licenses",
-        title = "Open-Source Licenses",
-        description = "Third-party open-source software libraries, legal credits and notices",
-        category = SettingsCategory.About,
-        page = SettingsPage.About,
-        keywords = listOf("license", "licenses", "open source", "credits", "notices", "apache", "mit"),
-        icon = Icons.Outlined.Description
-    ),
-    SettingsSearchEntry(
-        id = "privacy",
-        title = "Privacy & Security",
-        description = "Zero telemetry architecture, local cryptographic keys and no tracking guarantees",
-        category = SettingsCategory.About,
-        page = SettingsPage.About,
-        keywords = listOf("privacy", "security", "telemetry", "tracking", "data", "local keys", "analytics"),
-        icon = Icons.Outlined.Security
-    ),
-    SettingsSearchEntry(
-        id = "support_euthopiar",
-        title = "Support Euthopiar",
-        description = "Buy me a coffee and help keep the application free",
-        category = SettingsCategory.About,
-        page = SettingsPage.About,
-        keywords = listOf("donate", "coffee", "support", "sponsor", "contribution", "tip"),
-        icon = Icons.Outlined.Coffee
-    )
 )
 
 @Composable

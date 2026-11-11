@@ -30,11 +30,6 @@ enum class SettingsCategory(
         title = "Advanced",
         icon = androidx.compose.material.icons.Icons.Outlined.Storage,
         description = "Storage management, cache clearance, and backup"
-    ),
-    About(
-        title = "About",
-        icon = androidx.compose.material.icons.Icons.Outlined.Info,
-        description = "Version, licenses, GitHub repository, and attributions"
     )
 }
 
@@ -86,20 +81,6 @@ enum class SettingsPage(
         subtitle = "Caches, downloads and config backup",
         category = SettingsCategory.Advanced,
         icon = androidx.compose.material.icons.Icons.Outlined.Storage
-    ),
-    Updates(
-        route = "settings/updates",
-        title = "Application Updates",
-        subtitle = "Check for updates, changelog and release channel",
-        category = SettingsCategory.About,
-        icon = androidx.compose.material.icons.Icons.Outlined.SystemUpdateAlt
-    ),
-    About(
-        route = "settings/about",
-        title = "About Euthopiar",
-        subtitle = "Build info, licenses and project links",
-        category = SettingsCategory.About,
-        icon = androidx.compose.material.icons.Icons.Outlined.Info
     );
 
     companion object {

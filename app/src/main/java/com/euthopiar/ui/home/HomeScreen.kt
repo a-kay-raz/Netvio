@@ -87,8 +87,6 @@ import com.euthopiar.ui.components.TopHeaderBar
 import com.euthopiar.ui.components.TopTenRow
 import com.euthopiar.ui.components.HomeUpdateBanner
 import com.euthopiar.ui.components.UpdateInfoDialog
-import com.euthopiar.ui.components.DonationReminderDialog
-import com.euthopiar.data.common.DonationConfig
 import com.euthopiar.data.preferences.PreferencesRepository
 import com.euthopiar.data.update.AppUpdateManager
 import com.euthopiar.data.update.UpdateCheckState
@@ -142,7 +140,6 @@ fun HomeScreen(
     val autoCheckUpdates by preferencesRepository.autoCheckUpdates.collectAsState(initial = true)
     val skippedUpdateVersion by preferencesRepository.skippedUpdateVersion.collectAsState(initial = "")
     var showUpdateDialog by remember { mutableStateOf(false) }
-    var showDonationDialog by remember { mutableStateOf(false) }
 
     // Notify AppLaunchCoordinator when Home catalog data is ready for dynamic early release
     LaunchedEffect(uiState) {
@@ -169,63 +166,21 @@ fun HomeScreen(
         }
     }
 
-    // Home Donation Reminder Evaluation (New Install first content load, Post-App Update, 24-Hour Cooldown)
-    var donationEvaluatedThisSession by rememberSaveable { mutableStateOf(false) }
+    // Keep the stored app version up to date once Home content has loaded.
+    // AppNavHost reads lastAppVersion to detect app updates (walkthrough / What's New).
+    var versionStampedThisSession by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(uiState) {
-        if (donationEvaluatedThisSession) return@LaunchedEffect
+        if (versionStampedThisSession) return@LaunchedEffect
         // Must wait until home page gets loaded with content for the first time
         if (uiState !is HomeUiState.Success) return@LaunchedEffect
 
-        // Smooth settling delay after home rails and hero render
-        delay(1800L)
-
         val currentVersion = updateManager.getCurrentVersionName()
         val lastSavedVersion = preferencesRepository.lastAppVersion.first()
-        val lastPrompt = preferencesRepository.lastDonationPromptTimestamp.first()
-        val now = System.currentTimeMillis()
-
-        // If an automatic update check is actively in-flight, give it up to 1.5s to settle
-        var checksRemaining = 15
-        while (updateState is UpdateCheckState.Checking && checksRemaining > 0) {
-            delay(100L)
-            checksRemaining--
-        }
-
-        // Suppress if an app update is checking or available, or an action sheet is active
-        val isUpdateActive = updateState is UpdateCheckState.Checking ||
-            updateState is UpdateCheckState.UpdateAvailable ||
-            showUpdateDialog
-        val isSheetActive = quickActionItem != null ||
-            addToPlaylistMedia != null ||
-            watchlistSheetMedia != null
-
-        if (isUpdateActive || isSheetActive) {
-            return@LaunchedEffect
-        }
-
-        // Trigger conditions:
-        // 1. New installers after onboarding and content loaded for the first time (lastPrompt == 0L)
-        // 2. After application update (lastSavedVersion is set and differs from currentVersion)
-        // 3. 24-hour recurring cooldown expired
-        // 4. System clock skew recovery
-        val isNewInstallFirstContent = (lastPrompt == 0L)
-        val isPostAppUpdate = (lastSavedVersion.isNotBlank() && lastSavedVersion != currentVersion)
-        val isCooldownExpired = (lastPrompt > 0L && (now - lastPrompt >= DonationConfig.COOLDOWN_MS))
-        val isClockSkew = (lastPrompt > now)
-
-        if (isNewInstallFirstContent || isPostAppUpdate || isCooldownExpired || isClockSkew) {
-            preferencesRepository.setLastDonationPromptTimestamp(now)
+        if (lastSavedVersion != currentVersion) {
             preferencesRepository.setLastAppVersion(currentVersion)
-            showDonationDialog = true
-            donationEvaluatedThisSession = true
-        } else {
-            // Keep app version up-to-date even when donation popup is not triggered
-            if (lastSavedVersion != currentVersion) {
-                preferencesRepository.setLastAppVersion(currentVersion)
-            }
-            donationEvaluatedThisSession = true
         }
+        versionStampedThisSession = true
     }
     val lazyListState = rememberLazyListState()
     val navbarVisible = com.euthopiar.ui.navigation.LocalNavbarVisible.current
@@ -907,13 +862,6 @@ fun HomeScreen(
         }
     }
 
-    // Home Donation Reminder Popup
-    if (showDonationDialog && !showUpdateDialog) {
-        DonationReminderDialog(
-            hazeState = homeHazeState,
-            onDismiss = { showDonationDialog = false }
-        )
-    }
 } // Close outer Box
 } // Close CompositionLocalProvider
 } // Close fun HomeScreen

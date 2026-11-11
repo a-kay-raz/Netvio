@@ -29,7 +29,9 @@ open class ProviderRepository(
     /**
      * Saved catalog preferences supplied by the app module (see
      * [CatalogPreferenceProvider]). Null means no preferences were saved yet,
-     * in which case every catalog is on Home in manifest order.
+     * in which case catalogs use their defaults
+     * ([defaultCatalogOnHome]): core Indian feeds and Stremio catalogs on
+     * Home, progressive TMDB rails off Home.
      */
     var catalogPreferenceProvider: CatalogPreferenceProvider? = null
 
@@ -67,9 +69,12 @@ open class ProviderRepository(
      * the user hid from Home, renames rows the user renamed, and stable-sorts
      * keyed rows by their saved order. Rows without a saved order keep their
      * fetch order (Int.MAX_VALUE default), and rows without a key are never
-     * reordered. The sort is stable, so equal order values never shuffle the
-     * fetch order. Shared by [getHomeCatalog] and [getProgressiveHomeRails]
-     * so TMDB and Stremio rows follow exactly the same rules.
+     * reordered. Rows with no saved preference use their default visibility
+     * ([defaultCatalogOnHome]), so progressive TMDB rails stay off Home
+     * until the user enables them. The sort is stable, so equal order values
+     * never shuffle the fetch order. Shared by [getHomeCatalog] and
+     * [getProgressiveHomeRails] so TMDB and Stremio rows follow exactly the
+     * same rules.
      */
     private fun applyCatalogPreferences(
         rows: List<CatalogRow>,
@@ -77,7 +82,7 @@ open class ProviderRepository(
     ): List<CatalogRow> {
         val visible = rows.filter { row ->
             val key = row.catalogKey ?: return@filter true
-            preferences[key]?.onHome != false
+            preferences[key]?.onHome ?: defaultCatalogOnHome(key)
         }
         val renamed = visible.map { row ->
             val key = row.catalogKey
@@ -125,8 +130,9 @@ open class ProviderRepository(
 
         val stremioRows = fetchStremioCatalogRails(offset = 0, limit = 6)
         val preferences = readCatalogPreferences()
-        val combined = applyCatalogPreferences(tmdbRows + stremioRows, preferences)
-        if (combined.isNotEmpty()) combined else tmdbRows
+        // No fallback to the unfiltered rows: if the user hid every row the
+        // Home is empty (falling back here used to silently un-hide them).
+        applyCatalogPreferences(tmdbRows + stremioRows, preferences)
     }
 
     /**
@@ -144,6 +150,16 @@ open class ProviderRepository(
         var tmdbOffset = offset
         val tmdbRailCount = TmdbBridge.PROGRESSIVE_RAIL_DEFINITIONS.size
         while (visible.size < limit && tmdbOffset < tmdbRailCount) {
+            // Skip rails that are hidden (or off Home by default) without
+            // fetching them: hidden rails cost no network and never count
+            // toward the batch. The offset still advances past them, so the
+            // offset contract is unchanged.
+            while (tmdbOffset < tmdbRailCount) {
+                val railKey = TmdbBridge.tmdbCatalogKey(TmdbBridge.PROGRESSIVE_RAIL_DEFINITIONS[tmdbOffset].first)
+                if (preferences[railKey]?.onHome ?: defaultCatalogOnHome(railKey)) break
+                tmdbOffset++
+            }
+            if (tmdbOffset >= tmdbRailCount) break
             val take = minOf(limit - visible.size, tmdbRailCount - tmdbOffset)
             val batch = try {
                 TmdbBridge.fetchProgressiveRails(DohDns.metadataClient, tmdbOffset, take)
@@ -186,7 +202,7 @@ open class ProviderRepository(
         // the drop/take window follows the user-ordered list, so progressive
         // loading continues exactly where the first batch stopped.
         val targetDefs = orderedDefs
-            .filter { preferences[it.key]?.onHome != false }
+            .filter { preferences[it.key]?.onHome ?: defaultCatalogOnHome(it.key) }
             .drop(offset).take(limit)
         if (targetDefs.isEmpty()) return@withContext emptyList()
 

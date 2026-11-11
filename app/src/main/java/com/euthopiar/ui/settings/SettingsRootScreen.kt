@@ -521,35 +521,6 @@ fun SettingsRootScreen(
                     Spacer(modifier = Modifier.height(26.dp))
                 }
 
-                // Group 4: ABOUT
-                item(key = "group_about_header") {
-                    SettingsSectionHeader(title = SettingsCategory.About.title)
-                }
-
-                item(key = "row_updates") {
-                    StaggeredEnterRow(index = 6, isAnimated = hasAnimatedEnter, reduceMotion = reduceMotion) {
-                        SettingsHairlineRow(
-                            title = SettingsPage.Updates.title,
-                            subtitle = SettingsPage.Updates.subtitle,
-                            icon = SettingsPage.Updates.icon,
-                            onClick = { onNavigateToPage(SettingsPage.Updates.route) }
-                        )
-                    }
-                    SettingsRowHairline()
-                }
-
-                item(key = "row_about") {
-                    StaggeredEnterRow(index = 7, isAnimated = hasAnimatedEnter, reduceMotion = reduceMotion) {
-                        SettingsHairlineRow(
-                            title = SettingsPage.About.title,
-                            subtitle = SettingsPage.About.subtitle,
-                            icon = SettingsPage.About.icon,
-                            onClick = { onNavigateToPage(SettingsPage.About.route) }
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(28.dp))
-                }
-
                 // App version caption
                 item(key = "app_version_caption") {
                     val appVersionCaption = remember(context) {

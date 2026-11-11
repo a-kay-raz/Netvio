@@ -1,5 +1,6 @@
 package com.euthopiar.core.addons
 
+import com.euthopiar.core.util.TmdbBridge
 import kotlinx.serialization.Serializable
 
 /**
@@ -16,6 +17,16 @@ data class CatalogPreference(
     val orderIndex: Int = Int.MAX_VALUE,
     val customTitle: String? = null
 )
+
+/**
+ * Default Home visibility for a catalog key with no saved preference.
+ * Progressive TMDB discovery rails are off Home by default so a fresh
+ * install shows only the Pan-India core feeds plus enabled Stremio
+ * catalogs; every other catalog (core Indian feeds, Stremio catalogs)
+ * defaults to on Home. A saved preference always wins over this default.
+ */
+fun defaultCatalogOnHome(key: String): Boolean =
+    key !in TmdbBridge.PROGRESSIVE_RAIL_KEYS
 
 /**
  * Source of saved catalog preferences for [ProviderRepository].

@@ -2168,6 +2168,18 @@ object TmdbBridge {
     }
 
     /**
+     * Catalog keys of the 38 progressive discovery rails
+     * ([PROGRESSIVE_RAIL_DEFINITIONS]). Progressive rails are off Home by
+     * default (see [com.euthopiar.core.addons.defaultCatalogOnHome]) so a
+     * fresh install shows only the Pan-India core feeds plus enabled Stremio
+     * catalogs; the rails stay listed in the Catalog Manager under Not on
+     * Home and can be enabled from there.
+     */
+    val PROGRESSIVE_RAIL_KEYS: Set<String> by lazy {
+        PROGRESSIVE_RAIL_DEFINITIONS.map { (title, _) -> tmdbCatalogKey(title) }.toSet()
+    }
+
+    /**
      * Builds the Pan-India core feeds for the home catalog: the only default
      * feed set. Guaranteed zero brackets in any header title. Configured with
      * eyebrow and subtitle to seamlessly support all three header styles
