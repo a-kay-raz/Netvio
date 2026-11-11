@@ -267,6 +267,56 @@ fun AppNavHost(
         AppSnackbarController(snackbarHostState, coroutineScope)
     }
 
+    // Details open with a preload: fetch the item's details first (this warms
+    // TmdbBridge's enriched + season caches), then navigate. The details
+    // screen's own getDetails call then returns from cache almost instantly,
+    // so the page opens fully loaded instead of showing a loading screen.
+    // A preload already in flight ignores further poster taps until it lands.
+    var preloadingDetailsKey by remember { mutableStateOf<String?>(null) }
+
+    fun openDetailsPreloaded(
+        mediaId: String,
+        provider: String?,
+        type: com.netvio.core.model.MediaType,
+        title: String? = null,
+        posterUrl: String? = null,
+        logoUrl: String? = null,
+        depth: Int = 1
+    ) {
+        val key = "$mediaId|${provider.orEmpty()}|${type.name}"
+        if (preloadingDetailsKey != null) return
+        preloadingDetailsKey = key
+        coroutineScope.launch {
+            try {
+                kotlinx.coroutines.withTimeoutOrNull(10_000L) {
+                    com.netvio.core.repository.ProviderRepository.Default.getDetails(
+                        mediaId = mediaId,
+                        type = type,
+                        providerName = provider,
+                        fallbackTitle = title,
+                        fallbackPosterUrl = posterUrl
+                    )
+                }
+            } catch (_: Throwable) {
+                // Preload failed — navigate anyway; the details screen fetches
+                // itself and shows its loading state as a fallback.
+            } finally {
+                preloadingDetailsKey = null
+            }
+            navController.navigateSafely(
+                buildDetailsRoute(
+                    mediaId = mediaId,
+                    provider = provider,
+                    type = type.name,
+                    depth = depth,
+                    title = title,
+                    posterUrl = posterUrl,
+                    logoUrl = logoUrl
+                )
+            )
+        }
+    }
+
     val tabReselectionEvents = remember { kotlinx.coroutines.flow.MutableSharedFlow<NavTab>(extraBufferCapacity = 1) }
     val navbarHazeState = rememberHazeState()
 
@@ -393,15 +443,13 @@ fun AppNavHost(
                         .fillMaxSize()
                         .hazeSource(state = navbarHazeState),
                     onMediaClick = { item: MediaItem ->
-                        navController.navigateSafely(
-                            buildDetailsRoute(
-                                mediaId = item.id,
-                                provider = item.provider,
-                                type = item.type.name,
-                                title = item.title,
-                                posterUrl = item.posterUrl ?: item.backdropUrl,
-                                logoUrl = item.logoUrl
-                            )
+                        openDetailsPreloaded(
+                            mediaId = item.id,
+                            provider = item.provider,
+                            type = item.type,
+                            title = item.title,
+                            posterUrl = item.posterUrl ?: item.backdropUrl,
+                            logoUrl = item.logoUrl
                         )
                     },
                     onContinueWatchingClick = { item ->
@@ -461,15 +509,13 @@ fun AppNavHost(
                         .fillMaxSize()
                         .hazeSource(state = navbarHazeState),
                     onMediaClick = { item: MediaItem ->
-                        navController.navigateSafely(
-                            buildDetailsRoute(
-                                mediaId = item.id,
-                                provider = item.provider,
-                                type = item.type.name,
-                                title = item.title,
-                                posterUrl = item.posterUrl ?: item.backdropUrl,
-                                logoUrl = item.logoUrl
-                            )
+                        openDetailsPreloaded(
+                            mediaId = item.id,
+                            provider = item.provider,
+                            type = item.type,
+                            title = item.title,
+                            posterUrl = item.posterUrl ?: item.backdropUrl,
+                            logoUrl = item.logoUrl
                         )
                     },
                     onPlayMedia = { item: MediaItem ->
@@ -585,16 +631,14 @@ fun AppNavHost(
                     },
                     onNavigateToMedia = { rec ->
                         val p = rec.provider ?: provider ?: "tmdb"
-                        navController.navigateSafely(
-                            buildDetailsRoute(
-                                mediaId = rec.id,
-                                provider = p,
-                                type = rec.type.name,
-                                depth = depth + 1,
-                                title = rec.title,
-                                posterUrl = rec.posterUrl ?: rec.backdropUrl,
-                                logoUrl = rec.logoUrl
-                            )
+                        openDetailsPreloaded(
+                            mediaId = rec.id,
+                            provider = p,
+                            type = rec.type,
+                            depth = depth + 1,
+                            title = rec.title,
+                            posterUrl = rec.posterUrl ?: rec.backdropUrl,
+                            logoUrl = rec.logoUrl
                         )
                     },
                     onPlayMedia = { detail, episode, streamKey ->
@@ -703,12 +747,10 @@ fun AppNavHost(
                         .hazeSource(state = navbarHazeState),
                     onMediaClick = { mediaId, type, prov ->
                         val providerName = prov ?: registry.activePlugin.value.name
-                        navController.navigateSafely(
-                            buildDetailsRoute(
-                                mediaId = mediaId,
-                                provider = providerName,
-                                type = type.name
-                            )
+                        openDetailsPreloaded(
+                            mediaId = mediaId,
+                            provider = providerName,
+                            type = type
                         )
                     },
                     onPlayMedia = { mediaId, title, epTitle, season, episode, type, prov, epData ->
@@ -783,12 +825,10 @@ fun AppNavHost(
                         .hazeSource(state = navbarHazeState),
                     onMediaClick = { mediaId, type, prov ->
                         val providerName = prov ?: registry.activePlugin.value.name
-                        navController.navigateSafely(
-                            buildDetailsRoute(
-                                mediaId = mediaId,
-                                provider = providerName,
-                                type = type.name
-                            )
+                        openDetailsPreloaded(
+                            mediaId = mediaId,
+                            provider = providerName,
+                            type = type
                         )
                     },
                     onPlayMedia = { mediaId, title, epTitle, season, episode, type, prov, epData ->
