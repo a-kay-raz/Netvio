@@ -1932,7 +1932,12 @@ class PlayerViewModel(
                     imdbId = candidateImdbId,
                     title = streamTitle,
                     year = currentYear,
-                    originalLanguage = currentOriginalLanguage
+                    originalLanguage = currentOriginalLanguage,
+                    // A picked stream is pending: reuse the picker sheet's
+                    // already-fetched streams instead of force-refreshing, so
+                    // the picked stream matches by its exact URL and arrives
+                    // immediately instead of after a slow re-fetch.
+                    forceRefresh = preselectedStreamKey == null
                 )
                     .collect { emission ->
                         when (emission) {
@@ -6120,6 +6125,24 @@ class PlayerViewModel(
      * StreamSource.url — so addonId + url identifies the picked stream. The info-hash
      * fallback covers magnet re-encoding differences between the two sides.
      */
+    /**
+     * Normalizes an http(s) URL for pre-selected matching: query and fragment
+     * stripped, scheme and host lowercased, trailing slash removed. Two fetches
+     * of the same file differ only in the signed query token, so the normalized
+     * forms are equal while different files stay different.
+     */
+    private fun normalizeStreamUrlForMatch(raw: String): String {
+        val withoutQuery = raw.substringBefore('?').substringBefore('#').trim()
+        val schemeEnd = withoutQuery.indexOf("://")
+        if (schemeEnd <= 0) return withoutQuery.removeSuffix("/")
+        val scheme = withoutQuery.substring(0, schemeEnd).lowercase()
+        val rest = withoutQuery.substring(schemeEnd + 3)
+        val hostEnd = rest.indexOf('/')
+        val host = (if (hostEnd >= 0) rest.substring(0, hostEnd) else rest).lowercase()
+        val path = if (hostEnd >= 0) rest.substring(hostEnd) else ""
+        return "$scheme://$host$path".removeSuffix("/")
+    }
+
     private fun matchesPreselectedStreamKey(source: StreamSource, key: String): Boolean {
         val separator = key.indexOf('|')
         if (separator <= 0) return false
@@ -6128,6 +6151,14 @@ class PlayerViewModel(
         if (keyUrl.isBlank()) return false
         if (source.addonId != keyAddonId) return false
         if (source.url == keyUrl) return true
+        // Signed direct links change only their query token between the picker's
+        // fetch and the player's re-fetch, so an exact URL match fails even
+        // though it is the same file. Compare http(s) URLs with the query and
+        // fragment stripped as well; magnets keep the hash fallback below.
+        if (source.url.startsWith("http", ignoreCase = true) &&
+            keyUrl.startsWith("http", ignoreCase = true) &&
+            normalizeStreamUrlForMatch(source.url) == normalizeStreamUrlForMatch(keyUrl)
+        ) return true
         val hashRegex = Regex("""xt=urn:btih:([a-zA-Z0-9]+)""", RegexOption.IGNORE_CASE)
         val keyHash = hashRegex.find(keyUrl)?.groupValues?.getOrNull(1)
         val sourceHash = source.infoHash?.takeIf { it.isNotBlank() }

@@ -816,7 +816,8 @@ open class ProviderRepository(
         imdbId: String? = null,
         title: String? = null,
         year: Int? = null,
-        originalLanguage: String? = null
+        originalLanguage: String? = null,
+        forceRefresh: Boolean = true
     ): Flow<StreamEmission> = channelFlow {
         val cleanData = episodeData.removePrefix("tmdb:").removePrefix("tmdb/")
         val isLiveTvType = mediaType != null && (
@@ -850,7 +851,7 @@ open class ProviderRepository(
             episode = episode,
             title = title,
             year = year,
-            forceRefresh = true,
+            forceRefresh = forceRefresh,
             originalLanguage = originalLanguage,
             imdbId = imdbId
         )
