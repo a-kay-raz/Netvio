@@ -376,7 +376,7 @@ fun AppNavHost(
         val showNavRail = !windowDimensions.isPhone && !isFullscreen
 
         val currentAppVersion = remember(context) {
-            com.euthopiar.data.update.AppUpdateManager.getInstance(context).getCurrentVersionName()
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.0"
         }
         val lastSavedVersion by preferencesRepository.lastAppVersion.collectAsState(initial = null)
         val walkthroughCompletedVersion by preferencesRepository.walkthroughCompletedVersion.collectAsState(initial = null)

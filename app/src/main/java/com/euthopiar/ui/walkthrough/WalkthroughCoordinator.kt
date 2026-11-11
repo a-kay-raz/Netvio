@@ -3,7 +3,6 @@ package com.euthopiar.ui.walkthrough
 import android.content.Context
 import androidx.compose.ui.geometry.Rect
 import com.euthopiar.data.preferences.PreferencesRepository
-import com.euthopiar.data.update.AppUpdateManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -149,7 +148,7 @@ class WalkthroughCoordinator private constructor() {
     private fun persistCompletion(context: Context) {
         scope.launch(Dispatchers.IO) {
             try {
-                val currentVersion = AppUpdateManager.getInstance(context).getCurrentVersionName()
+                val currentVersion = context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.0"
                 PreferencesRepository.getInstance(context).setWalkthroughCompletedVersion(currentVersion)
             } catch (_: Exception) {}
         }

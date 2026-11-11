@@ -21,9 +21,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.SystemUpdateAlt
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -84,9 +81,7 @@ fun TopHeaderBar(
     modifier: Modifier = Modifier,
     isScrolled: Boolean = false,
     scrollFraction: () -> Float = { if (isScrolled) 1f else 0f },
-    hazeState: HazeState? = null,
-    hasUpdateAvailable: Boolean = false,
-    onUpdateBadgeClick: (() -> Unit)? = null
+    hazeState: HazeState? = null
 ) {
     val context = LocalContext.current
     val windowDimensions = rememberWindowDimensions()
@@ -212,51 +207,11 @@ fun TopHeaderBar(
                         }
                 )
 
-                // Trailing Actions: Update notification badge (if available) + Profile avatar
+                // Trailing Actions: Profile avatar
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    if (hasUpdateAvailable && onUpdateBadgeClick != null) {
-                        Box(
-                            modifier = Modifier
-                                .size(Dimens.minTouchTarget)
-                                .aspectRatio(1f)
-                                .pressable(
-                                    scaleDown = 0.96f,
-                                    onClickLabel = "Update available",
-                                    onClick = onUpdateBadgeClick
-                                )
-                                .tvFocusable(shape = ShapeFull),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.White.copy(alpha = 0.09f))
-                                    .border(HairlineWidth, Color.White.copy(alpha = 0.22f), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.SystemUpdateAlt,
-                                    contentDescription = "Update available",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(17.dp)
-                                )
-                                // Subtle pure-white notification dot at top-right
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(top = 6.dp, end = 6.dp)
-                                        .size(6.dp)
-                                        .clip(CircleShape)
-                                        .background(Color.White)
-                                )
-                            }
-                        }
-                    }
-
                     Box(
                         modifier = Modifier
                             .size(Dimens.minTouchTarget)

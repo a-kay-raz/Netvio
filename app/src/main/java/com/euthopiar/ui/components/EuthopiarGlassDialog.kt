@@ -68,7 +68,7 @@ import dev.chrisbanes.haze.hazeEffect
 /**
  * Universal Frosted-Glass Alert & Confirmation Dialog for Euthopiar.
  *
- * Strictly adheres to the UpdateInfoDialog gold-standard formula:
+ * Strictly adheres to the gold-standard glass dialog formula:
  * - Scrim: Full-screen black at 65% opacity.
  * - Card: Max width 380dp, 16dp horizontal margin, 28dp corner radius.
  * - Surface: Dark frosted obsidian glass (blur 24dp Haze, 0.5dp hairline border @ 16% white).

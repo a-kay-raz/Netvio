@@ -166,7 +166,7 @@ fun QuickProfileSwitcherDialog(
                 Column(
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    // Header Block matching UpdateInfoDialog
+                    // Header Block matching the glass dialog style
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()

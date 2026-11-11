@@ -250,7 +250,7 @@ private fun KeypadButton(
 
 /**
  * PIN Challenge Dialog shown when switching into a locked profile.
- * Restyled with frosted glass recipe matching UpdateInfoDialog.
+ * Restyled with the frosted glass recipe.
  */
 @Composable
 fun PinChallengeDialog(
@@ -468,7 +468,7 @@ private enum class SetupPinStep {
 
 /**
  * 2-Step PIN Creator Dialog: Enter PIN -> Confirm PIN -> Verified.
- * Restyled with frosted glass recipe matching UpdateInfoDialog.
+ * Restyled with the frosted glass recipe.
  */
 @Composable
 fun PinCreatorDialog(

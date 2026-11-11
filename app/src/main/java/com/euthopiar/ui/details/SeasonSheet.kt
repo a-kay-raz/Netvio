@@ -241,7 +241,7 @@ fun SeasonSheet(
                     )
                 }
 
-                // Fixed Header matching UpdateInfoDialog
+                // Fixed Header matching the glass dialog style
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()

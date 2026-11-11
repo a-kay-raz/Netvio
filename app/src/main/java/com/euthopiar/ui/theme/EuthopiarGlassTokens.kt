@@ -18,7 +18,7 @@ import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
 
 /**
- * Gold-standard frosted glassmorphism tokens matching the Home Page Update Dialog (UpdateInfoDialog).
+ * Gold-standard frosted glassmorphism tokens for glass dialogs.
  *
  * Characteristics:
  * 1. Blur Radius: 24dp Haze blur sampling the underlying screen.
@@ -107,7 +107,7 @@ object EuthopiarGlassTokens {
 }
 
 /**
- * Standard modifier for modal glass cards (Dialogs & Sheets) adhering to the UpdateInfoDialog formula.
+ * Standard modifier for modal glass cards (Dialogs & Sheets) adhering to the glass dialog formula.
  */
 fun Modifier.euthopiarGlassCard(
     shape: Shape = RoundedCornerShape(EuthopiarGlassTokens.RadiusDialog),

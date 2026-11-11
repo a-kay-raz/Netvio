@@ -739,7 +739,7 @@ fun AvatarWithThinRing(
 }
 
 /**
- * Reusable frosted glass confirmation dialog matching UpdateInfoDialog.
+ * Reusable frosted glass confirmation dialog.
  * Headline 20sp Bold, 96% white, muted message 13.5sp, 48dp solid white pill primary action.
  */
 @Composable

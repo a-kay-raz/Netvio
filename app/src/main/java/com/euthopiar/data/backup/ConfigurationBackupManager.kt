@@ -90,7 +90,6 @@ class ConfigurationBackupManager(private val context: Context) {
             "catalog_preferences" to KeyType.STRING,
             "active_debrid_provider" to KeyType.STRING,
             "trakt_username" to KeyType.STRING,
-            "skipped_update_version" to KeyType.STRING,
             "last_app_version" to KeyType.STRING,
 
             // Boolean preferences
@@ -112,8 +111,6 @@ class ConfigurationBackupManager(private val context: Context) {
             "amoled_mode" to KeyType.BOOLEAN,
             "smart_failover_enabled" to KeyType.BOOLEAN,
             "audio_passthrough_enabled" to KeyType.BOOLEAN,
-            "auto_check_updates" to KeyType.BOOLEAN,
-            "include_prereleases" to KeyType.BOOLEAN,
 
             // Int preferences
             "seek_interval_seconds" to KeyType.INT,
@@ -123,10 +120,6 @@ class ConfigurationBackupManager(private val context: Context) {
             "skip_outro_duration_seconds" to KeyType.INT,
             "countdown_next_episode_seconds" to KeyType.INT,
             "playback_buffer_size_mb" to KeyType.INT,
-            "last_app_version_code" to KeyType.INT,
-
-            // Long preferences
-            "last_update_check_timestamp" to KeyType.LONG,
 
             // StringSet preferences
             "repository_urls" to KeyType.STRING_SET,

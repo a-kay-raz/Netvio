@@ -39,7 +39,7 @@ import kotlinx.coroutines.launch
  * without any streaming provider plugins installed.
  *
  * Designed with the exact same visual luxury, glassmorphism, and Emil Kowalski
- * spring physics as [com.euthopiar.ui.components.UpdateInfoDialog].
+ * spring physics as the glass dialogs elsewhere in the app.
  */
 @Composable
 fun NoStreamingEngineDialog(

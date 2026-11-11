@@ -145,15 +145,8 @@ class PreferencesRepository private constructor(private val context: Context) {
         val SMART_FAILOVER_ENABLED = booleanPreferencesKey("smart_failover_enabled")
         val AUDIO_PASSTHROUGH_ENABLED = booleanPreferencesKey("audio_passthrough_enabled")
 
-        // 1.4 Application Update Preferences
-        val AUTO_CHECK_UPDATES = booleanPreferencesKey("auto_check_updates")
-        val INCLUDE_PRERELEASES = booleanPreferencesKey("include_prereleases")
-        val SKIPPED_UPDATE_VERSION = stringPreferencesKey("skipped_update_version")
-        val LAST_UPDATE_CHECK_TIMESTAMP = longPreferencesKey("last_update_check_timestamp")
-
-        // 1.5 App Version Preferences
+        // 1.4 App Version Preferences
         val LAST_APP_VERSION = stringPreferencesKey("last_app_version")
-        val LAST_APP_VERSION_CODE = intPreferencesKey("last_app_version_code")
         val WALKTHROUGH_COMPLETED_VERSION = stringPreferencesKey("walkthrough_completed_version")
 
         // 1.6 Supabase Cloud Sync
@@ -999,66 +992,9 @@ class PreferencesRepository private constructor(private val context: Context) {
         }
     }
 
-    val autoCheckUpdates: Flow<Boolean> = context.preferencesDataStore.data
-        .catch { exception ->
-            if (exception is IOException) emit(emptyPreferences()) else throw exception
-        }
-        .map { preferences ->
-            preferences[PreferencesKeys.AUTO_CHECK_UPDATES] ?: true
-        }
-        .distinctUntilChanged()
-
-    suspend fun setAutoCheckUpdates(enabled: Boolean) {
-        context.preferencesDataStore.edit { preferences ->
-            preferences[PreferencesKeys.AUTO_CHECK_UPDATES] = enabled
-        }
-    }
-
-    val includePrereleases: Flow<Boolean> = context.preferencesDataStore.data
-        .catch { exception ->
-            if (exception is IOException) emit(emptyPreferences()) else throw exception
-        }
-        .map { preferences ->
-            preferences[PreferencesKeys.INCLUDE_PRERELEASES] ?: false
-        }
-        .distinctUntilChanged()
-
-    suspend fun setIncludePrereleases(enabled: Boolean) {
-        context.preferencesDataStore.edit { preferences ->
-            preferences[PreferencesKeys.INCLUDE_PRERELEASES] = enabled
-        }
-    }
-
-    val skippedUpdateVersion: Flow<String> = context.preferencesDataStore.data
-        .catch { exception ->
-            if (exception is IOException) emit(emptyPreferences()) else throw exception
-        }
-        .map { preferences ->
-            preferences[PreferencesKeys.SKIPPED_UPDATE_VERSION] ?: ""
-        }
-        .distinctUntilChanged()
-
-    suspend fun setSkippedUpdateVersion(version: String) {
-        context.preferencesDataStore.edit { preferences ->
-            preferences[PreferencesKeys.SKIPPED_UPDATE_VERSION] = version
-        }
-    }
-
-    val lastUpdateCheckTimestamp: Flow<Long> = context.preferencesDataStore.data
-        .catch { exception ->
-            if (exception is IOException) emit(emptyPreferences()) else throw exception
-        }
-        .map { preferences ->
-            preferences[PreferencesKeys.LAST_UPDATE_CHECK_TIMESTAMP] ?: 0L
-        }
-        .distinctUntilChanged()
-
-    suspend fun setLastUpdateCheckTimestamp(timestampMs: Long) {
-        context.preferencesDataStore.edit { preferences ->
-            preferences[PreferencesKeys.LAST_UPDATE_CHECK_TIMESTAMP] = timestampMs
-        }
-    }
-
+    // Last saved app version. AppNavHost reads this to tell a fresh install
+    // (show the walkthrough) from an existing install (skip it); HomeScreen
+    // stamps it once Home content has loaded.
     val lastAppVersion: Flow<String> = context.preferencesDataStore.data
         .catch { exception ->
             if (exception is IOException) emit(emptyPreferences()) else throw exception
@@ -1071,21 +1007,6 @@ class PreferencesRepository private constructor(private val context: Context) {
     suspend fun setLastAppVersion(version: String) {
         context.preferencesDataStore.edit { preferences ->
             preferences[PreferencesKeys.LAST_APP_VERSION] = version
-        }
-    }
-
-    val lastAppVersionCode: Flow<Int> = context.preferencesDataStore.data
-        .catch { exception ->
-            if (exception is IOException) emit(emptyPreferences()) else throw exception
-        }
-        .map { preferences ->
-            preferences[PreferencesKeys.LAST_APP_VERSION_CODE] ?: 0
-        }
-        .distinctUntilChanged()
-
-    suspend fun setLastAppVersionCode(versionCode: Int) {
-        context.preferencesDataStore.edit { preferences ->
-            preferences[PreferencesKeys.LAST_APP_VERSION_CODE] = versionCode
         }
     }
 

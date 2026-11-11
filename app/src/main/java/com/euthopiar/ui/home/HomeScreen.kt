@@ -85,11 +85,7 @@ import com.euthopiar.ui.longpress.UserReaction
 import com.euthopiar.ui.longpress.toSheetItem
 import com.euthopiar.ui.components.TopHeaderBar
 import com.euthopiar.ui.components.TopTenRow
-import com.euthopiar.ui.components.HomeUpdateBanner
-import com.euthopiar.ui.components.UpdateInfoDialog
 import com.euthopiar.data.preferences.PreferencesRepository
-import com.euthopiar.data.update.AppUpdateManager
-import com.euthopiar.data.update.UpdateCheckState
 import kotlinx.coroutines.flow.first
 import com.euthopiar.ui.navigation.ObserveScrollForNavbar
 import com.euthopiar.ui.theme.Accent
@@ -131,15 +127,7 @@ fun HomeScreen(
     var addToPlaylistMedia by remember { mutableStateOf<MediaItem?>(null) }
     var watchlistSheetMedia by remember { mutableStateOf<MediaItem?>(null) }
 
-    // GitHub Release Update Management
-    val updateManager = remember(context) { AppUpdateManager.getInstance(context) }
-    val updateState by updateManager.updateState.collectAsState()
-    val downloadState by updateManager.downloadState.collectAsState()
-    val autoPopupShown by updateManager.autoPopupShownForSession.collectAsState()
     val preferencesRepository = remember(context) { PreferencesRepository.getInstance(context) }
-    val autoCheckUpdates by preferencesRepository.autoCheckUpdates.collectAsState(initial = true)
-    val skippedUpdateVersion by preferencesRepository.skippedUpdateVersion.collectAsState(initial = "")
-    var showUpdateDialog by remember { mutableStateOf(false) }
 
     // Notify AppLaunchCoordinator when Home catalog data is ready for dynamic early release
     LaunchedEffect(uiState) {
@@ -150,24 +138,9 @@ fun HomeScreen(
         }
     }
 
-    // Automatic update check on app launch
-    LaunchedEffect(autoCheckUpdates) {
-        if (autoCheckUpdates && updateState is UpdateCheckState.Idle) {
-            updateManager.checkForUpdates(forceManual = false)
-        }
-    }
-
-    // Auto-popup update dialog once per app session when update is available and not skipped
-    LaunchedEffect(updateState, skippedUpdateVersion, autoPopupShown) {
-        val available = updateState as? UpdateCheckState.UpdateAvailable
-        if (available != null && !autoPopupShown && available.release.versionName != skippedUpdateVersion) {
-            showUpdateDialog = true
-            updateManager.markAutoPopupShownForSession()
-        }
-    }
-
     // Keep the stored app version up to date once Home content has loaded.
-    // AppNavHost reads lastAppVersion to detect app updates (walkthrough / What's New).
+    // AppNavHost reads lastAppVersion to tell a fresh install (show the
+    // walkthrough) from an existing install (skip it).
     var versionStampedThisSession by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(uiState) {
@@ -175,7 +148,7 @@ fun HomeScreen(
         // Must wait until home page gets loaded with content for the first time
         if (uiState !is HomeUiState.Success) return@LaunchedEffect
 
-        val currentVersion = updateManager.getCurrentVersionName()
+        val currentVersion = context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.0"
         val lastSavedVersion = preferencesRepository.lastAppVersion.first()
         if (lastSavedVersion != currentVersion) {
             preferencesRepository.setLastAppVersion(currentVersion)
@@ -184,7 +157,7 @@ fun HomeScreen(
     }
     val lazyListState = rememberLazyListState()
     val navbarVisible = com.euthopiar.ui.navigation.LocalNavbarVisible.current
-    val shouldHideHomeNavbar = showUpdateDialog ||
+    val shouldHideHomeNavbar =
         quickActionItem != null ||
         addToPlaylistMedia != null ||
         watchlistSheetMedia != null
@@ -698,16 +671,9 @@ fun HomeScreen(
             TopHeaderBar(
                 registry = registry,
                 scrollFraction = { headerScrollFraction },
-                hazeState = if (isPreviewActive) null else homeHazeState,
-                hasUpdateAvailable = updateState is UpdateCheckState.UpdateAvailable,
-                onUpdateBadgeClick = { showUpdateDialog = true }
+                hazeState = if (isPreviewActive) null else homeHazeState
             )
             OfflineBanner()
-            HomeUpdateBanner(
-                hazeState = if (isPreviewActive) null else homeHazeState,
-                onOpenUpdatePopup = { _, _ -> showUpdateDialog = true },
-                onDismiss = { updateManager.dismissBannerForSession() }
-            )
         }
 
     // Long-Press Quick Actions Host (sits on top of blurred hazeSource content)
@@ -840,26 +806,6 @@ fun HomeScreen(
             onPlaylistAction = { msg -> snackbarController.show(msg) },
             onDismiss = { watchlistSheetMedia = null }
         )
-    }
-
-    // Application Update Information Popup
-    if (showUpdateDialog) {
-        val available = updateState as? UpdateCheckState.UpdateAvailable
-        if (available != null) {
-            UpdateInfoDialog(
-                release = available.release,
-                currentVersion = available.currentVersion,
-                downloadState = downloadState,
-                hazeState = homeHazeState,
-                onDismiss = { showUpdateDialog = false },
-                onDownloadAndInstall = { rel -> updateManager.downloadAndInstallUpdate(rel) },
-                onTriggerInstall = { file, fallbackUrl -> updateManager.triggerInstallApk(file, fallbackUrl) },
-                onSkipVersion = { version ->
-                    updateManager.skipVersion(version)
-                    showUpdateDialog = false
-                }
-            )
-        }
     }
 
 } // Close outer Box
