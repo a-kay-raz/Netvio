@@ -172,6 +172,10 @@ object DownloadTokens {
      *
      * This is deliberately NOT highest quality: the best match is the stream
      * most likely to play fast, reliably and buffer-free, with no filter UI.
+     * - The best match is the smallest 1080p stream: 1080p is the quality
+     *   sweet spot (sharp on phone/TV, far smaller than 4K), and the smallest
+     *   file of that quality buffers the least. When no 1080p stream exists
+     *   at all, the rule below runs on the full list instead.
      * - Streams with a known size above [PLAYBACK_BEST_MATCH_MAX_SIZE_GB] are
      *   never the best match (heavy files buffer most); unknown sizes stay
      *   eligible so a missing size never hides every stream.
@@ -188,13 +192,24 @@ object DownloadTokens {
      */
     fun selectPlaybackBestMatch(streams: List<StreamItem>): StreamItem? {
         if (streams.isEmpty()) return null
-        val (withinCap, overCap) = streams.partition { stream ->
+        val fullHd = streams.filter { is1080p(it) }
+        if (fullHd.isNotEmpty()) {
+            return pickPlaybackBest(fullHd) ?: fullHd.first()
+        }
+        return pickPlaybackBest(streams) ?: streams.first()
+    }
+
+    /** True when the stream's quality resolves to 1080p (via quality, else name/title). */
+    private fun is1080p(stream: StreamItem): Boolean =
+        extractResolution(stream.quality, stream.name ?: stream.title) == "1080p"
+
+    private fun pickPlaybackBest(pool: List<StreamItem>): StreamItem? {
+        val (withinCap, overCap) = pool.partition { stream ->
             val sizeGb = playbackSizeInGb(stream)
             sizeGb == null || sizeGb <= PLAYBACK_BEST_MATCH_MAX_SIZE_GB
         }
         return pickPlaybackBestFromPool(withinCap)
             ?: pickPlaybackBestFromPool(overCap)
-            ?: streams.first()
     }
 
     private fun pickPlaybackBestFromPool(pool: List<StreamItem>): StreamItem? {
