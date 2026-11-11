@@ -409,7 +409,6 @@ fun MediaDetailsScreen(
                         )
                     MediaDetailsLoadingView(
                         title = state.title ?: initialTitle,
-                        posterUrl = state.posterUrl ?: initialPosterUrl,
                         logoUrl = resolvedLogo,
                         screenBg = screenBg
                     )
@@ -1952,13 +1951,12 @@ private fun DetailsBackdropHero(
 }
 
 /**
- * Cinematic loading view with content logo in the dead center of the screen,
- * calm breathing animation, and atmospheric backdrop without any back button.
+ * Cinematic loading view with content logo in the dead center of the screen
+ * and calm breathing animation, without any back button.
  */
 @Composable
 private fun MediaDetailsLoadingView(
     title: String?,
-    posterUrl: String?,
     logoUrl: String?,
     screenBg: Color,
     modifier: Modifier = Modifier
@@ -1992,35 +1990,7 @@ private fun MediaDetailsLoadingView(
             .background(screenBg),
         contentAlignment = Alignment.Center
     ) {
-        // 1. Atmospheric Ambient Backdrop (Dimmed & Scrimmed)
-        if (!posterUrl.isNullOrBlank()) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(posterUrl)
-                    .crossfade(250)
-                    .build(),
-                contentDescription = null,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { alpha = 0.16f },
-                contentScale = ContentScale.Crop
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                screenBg.copy(alpha = 0.82f),
-                                screenBg.copy(alpha = 0.94f),
-                                screenBg
-                            )
-                        )
-                    )
-            )
-        }
-
-        // 2. Optical Center Breathing Content Custom Logo (NO back button on loading screen)
+        // 1. Optical Center Breathing Content Custom Logo (NO back button on loading screen)
         var isLogoFailed by remember(logoUrl) { mutableStateOf(false) }
 
         Box(
