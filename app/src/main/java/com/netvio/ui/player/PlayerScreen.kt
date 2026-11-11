@@ -281,7 +281,11 @@ fun PlayerScreen(
                 val lp = window.attributes
                 lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
                 window.attributes = lp
-                WindowCompat.setDecorFitsSystemWindows(window, true)
+                // Keep edge-to-edge ON (same as enableEdgeToEdge() in
+                // MainActivity): setting this to true insets the whole
+                // app below the status bar and leaves a black band on
+                // top of Home after every player visit.
+                WindowCompat.setDecorFitsSystemWindows(window, false)
                 val controller = WindowCompat.getInsetsController(window, window.decorView)
                 controller.show(WindowInsetsCompat.Type.systemBars())
             }
