@@ -52,3 +52,6 @@ Refrence Nuviou/NuvioMobile/
 Refrence Nuviou/NuvioMobile
 AI_RULES.md
 .agents/skills/netvio-pipeline/
+
+# Release signing keystore (decoded in CI from secrets, never committed)
+app/release-keystore.p12
