@@ -17,12 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -35,7 +31,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -294,21 +289,6 @@ fun LinkSelectionContent(
         }
     }
 
-    // Addons are toggled from the chip row below the best match. Session-only:
-    // nothing is persisted. By default the first addon opens so its links are
-    // visible in expanded form right away; the rest stay collapsed until tapped.
-    var expandedAddonIds by remember { mutableStateOf(emptySet<String>()) }
-    var defaultExpandedApplied by remember { mutableStateOf(false) }
-    LaunchedEffect(displayGroups) {
-        if (!defaultExpandedApplied) {
-            val first = displayGroups.firstOrNull()
-            if (first != null) {
-                expandedAddonIds = setOf(first.addonId)
-                defaultExpandedApplied = true
-            }
-        }
-    }
-
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -474,71 +454,9 @@ fun LinkSelectionContent(
                         }
                     }
 
-                    // Addons in one row of chips just below the best match.
-                    // Tap a chip to expand that addon's links full-width below
-                    // the row; tap again to collapse. Session-only: nothing is
-                    // persisted, so every sheet open starts fully collapsed.
-                    item(key = "link_groups_row") {
-                        LazyRow(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 4.dp, bottom = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            items(
-                                items = displayGroups,
-                                key = { group -> "link_chip_${group.addonId}" }
-                            ) { group ->
-                                val isExpanded = group.addonId in expandedAddonIds
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(20.dp))
-                                        .background(
-                                            if (isExpanded) Color.White
-                                            else DownloadTokens.pressedSurface
-                                        )
-                                        .pressable(
-                                            onClickLabel = if (isExpanded) "Collapse ${group.addonName}" else "Expand ${group.addonName}",
-                                            onClick = {
-                                                expandedAddonIds = if (isExpanded) {
-                                                    expandedAddonIds - group.addonId
-                                                } else {
-                                                    expandedAddonIds + group.addonId
-                                                }
-                                            }
-                                        )
-                                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "${group.addonName} · ${group.streams.size}",
-                                        style = TextStyle(
-                                            fontFamily = AppFontFamily,
-                                            fontWeight = FontWeight.Medium,
-                                            fontSize = 13.sp,
-                                            color = if (isExpanded) Color(0xFF0B0B0F)
-                                            else DownloadTokens.textPrimary
-                                        ),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Icon(
-                                        imageVector = if (isExpanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
-                                        contentDescription = if (isExpanded) "Collapse ${group.addonName}" else "Expand ${group.addonName}",
-                                        tint = if (isExpanded) Color(0xFF0B0B0F)
-                                        else DownloadTokens.textMuted,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Expanded addons show their links full-width below the chip row.
+                    // Every addon group shows its links, one group after another.
                     displayGroups.forEach { group ->
-                        if (group.addonId in expandedAddonIds) {
-                            item(key = "link_group_section_${group.addonId}") {
+                        item(key = "link_group_section_${group.addonId}") {
                                 Column(modifier = Modifier.fillMaxWidth()) {
                                     Text(
                                         text = "${group.addonName} · ${group.streams.size}",
@@ -570,7 +488,6 @@ fun LinkSelectionContent(
                                     Spacer(modifier = Modifier.height(8.dp))
                                 }
                             }
-                        }
                     }
 
                     // Subtle loading indicator at bottom of list while background scrapers are still running
