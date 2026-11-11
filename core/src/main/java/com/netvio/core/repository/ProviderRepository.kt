@@ -372,8 +372,16 @@ open class ProviderRepository(
             mediaItem.provider?.contains("stremio", ignoreCase = true) == true ||
             mediaItem.provider?.contains("nuvio", ignoreCase = true) == true
 
-        // Step 1: Direct Addon meta First
-        if (metaSupportingAddons.isNotEmpty()) {
+        // Step 1: Direct Addon meta First — skipped for pure TMDB items. A
+        // numeric TMDB id is not a Stremio id, so every addon probed with it
+        // just fails (404, or up to its 10s timeout if the addon is slow)
+        // before the TMDB fetch that actually resolves it even starts — that
+        // sequential probing was the dead time on every poster tap. The TMDB
+        // path below handles numeric ids directly, and the plugin fallback
+        // still runs if it fails.
+        val isPureTmdbId = baseId.isNotEmpty() && baseId.all { it.isDigit() } &&
+            targetName.equals("tmdb", ignoreCase = true)
+        if (!isPureTmdbId && metaSupportingAddons.isNotEmpty()) {
             for ((addon, metaType) in metaSupportingAddons) {
                 val metaUrl = com.netvio.core.addons.buildAddonResourceUrl(
                     manifestUrl = addon.manifestUrl,
