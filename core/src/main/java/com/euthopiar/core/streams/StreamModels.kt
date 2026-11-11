@@ -148,6 +148,20 @@ data class StreamItem(
         if (u.contains("pixel.hubcloud", ignoreCase = true)) return false
         return true
     }
+
+    /**
+     * Stable key identifying this exact stream for the long-press stream picker
+     * handoff to the player: addon id + the URL the player will actually play.
+     * The URL component is the playable direct URL for direct streams and the
+     * effective magnet/hash for torrents, mirroring ProviderRepository's
+     * StreamItem -> StreamSource mapping (playableDirectUrl ?: effectiveMagnetOrHash).
+     * Returns null when the stream has nothing playable, in which case the caller
+     * must fall back to normal auto-pick playback.
+     */
+    fun preselectedStreamKey(): String? {
+        val urlPart = playableDirectUrl ?: effectiveMagnetOrHash ?: return null
+        return "$addonId|$urlPart"
+    }
 }
 
 data class AddonStreamGroup(

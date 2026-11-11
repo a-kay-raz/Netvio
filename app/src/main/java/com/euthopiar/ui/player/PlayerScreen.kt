@@ -90,6 +90,7 @@ fun PlayerScreen(
     episodeTitle: String? = null,
     initialSeason: Int? = null,
     initialEpisode: Int? = null,
+    preselectedStreamKey: String? = null,
     onBack: () -> Unit,
     onNavigateToPluginManager: (() -> Unit)? = null,
     viewModel: PlayerViewModel = viewModel()
@@ -288,7 +289,7 @@ fun PlayerScreen(
     }
 
     // Load stream on initial launch or key parameter changes
-    LaunchedEffect(mediaId, episodeData) {
+    LaunchedEffect(mediaId, episodeData, preselectedStreamKey) {
         val mediaType = try {
             if (type != null) MediaType.valueOf(type) else MediaType.MOVIE
         } catch (e: Exception) {
@@ -302,7 +303,8 @@ fun PlayerScreen(
             title = mediaTitle,
             epTitle = episodeTitle,
             season = initialSeason,
-            episode = initialEpisode
+            episode = initialEpisode,
+            preselectedStreamKey = preselectedStreamKey
         )
     }
 

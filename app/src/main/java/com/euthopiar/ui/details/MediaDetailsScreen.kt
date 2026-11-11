@@ -175,6 +175,8 @@ import com.euthopiar.core.model.EpisodeItem
 import com.euthopiar.core.model.MediaDetail
 import com.euthopiar.core.model.MediaItem
 import com.euthopiar.core.model.MediaType
+import com.euthopiar.core.streams.StreamItem
+import com.euthopiar.ui.details.sheets.LinkSelectionSheet
 import com.euthopiar.data.local.PlaybackHistoryEntity
 import com.euthopiar.ui.components.AppAsyncImage
 import com.euthopiar.ui.components.AppTabRow
@@ -237,7 +239,7 @@ fun MediaDetailsScreen(
     depth: Int = 1,
     onBack: () -> Unit,
     onCloseToRoot: (() -> Unit)? = null,
-    onPlayMedia: (detail: MediaDetail, episode: EpisodeItem?) -> Unit = { _, _ -> },
+    onPlayMedia: (detail: MediaDetail, episode: EpisodeItem?, streamKey: String?) -> Unit = { _, _, _ -> },
     onNavigateToMedia: ((MediaItem) -> Unit)? = null,
     onNavigateToPluginManager: (() -> Unit)? = null,
     viewModel: MediaDetailsViewModel = viewModel(),
@@ -280,7 +282,7 @@ fun MediaDetailsScreen(
             if (!hasAnyStreamProviders) {
                 showNoPluginsDialog = true
             } else {
-                safeNavigate { onPlayMedia(d, ep) }
+                safeNavigate { onPlayMedia(d, ep, null) }
             }
         }
     }
@@ -330,6 +332,37 @@ fun MediaDetailsScreen(
     var selectedRelatedMediaForPlaylist by remember { mutableStateOf<com.euthopiar.core.model.MediaItem?>(null) }
     var showTrailerDialog by remember { mutableStateOf(false) }
     var episodeToDownload by remember { mutableStateOf<EpisodeItem?>(null) }
+    var showLinkSheet by remember { mutableStateOf(false) }
+    var linkSheetEpisode by remember { mutableStateOf<EpisodeItem?>(null) }
+
+    // Long-press on Play opens the stream picker instead of auto-picking a stream.
+    // Same no-providers gate as handlePlayRequest: without any stream provider the
+    // sheet could never load anything, so show the existing dialog instead.
+    val handleLinkSheetRequest: (detail: MediaDetail, episode: EpisodeItem?) -> Unit = remember(hasAnyStreamProviders) {
+        { _, ep ->
+            if (!hasAnyStreamProviders) {
+                showNoPluginsDialog = true
+            } else {
+                linkSheetEpisode = ep
+                showLinkSheet = true
+            }
+        }
+    }
+
+    // Plays the exact stream picked in the sheet: dismisses the sheet, builds the
+    // "addonId|url" key for the chosen stream and navigates with it. A stream with
+    // no playable URL degrades to the normal tap path (auto-pick, no key).
+    val handlePlayWithStream: (detail: MediaDetail, episode: EpisodeItem?, stream: StreamItem) -> Unit =
+        { d, ep, stream ->
+            val streamKey = stream.preselectedStreamKey()
+            showLinkSheet = false
+            linkSheetEpisode = null
+            if (streamKey == null) {
+                handlePlayRequest(d, ep)
+            } else {
+                safeNavigate { onPlayMedia(d, ep, streamKey) }
+            }
+        }
 
     val connectivityManager = remember { context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager }
     val isMetered = try { connectivityManager?.isActiveNetworkMetered == true } catch (_: Exception) { false }
@@ -513,6 +546,7 @@ fun MediaDetailsScreen(
                                         downloads = downloads,
                                         hasStreamEngine = hasAnyStreamProviders,
                                         onPlay = { handlePlayRequest(detail, targetEpisodeForPlay) },
+                                        onPlayLongClick = { handleLinkSheetRequest(detail, targetEpisodeForPlay) },
                                         onWatchlist = { showWatchlistSheet = true },
                                         onDownload = {
                                             episodeToDownload = if (isTv) {
@@ -849,6 +883,7 @@ fun MediaDetailsScreen(
                                             downloads = downloads,
                                             hasStreamEngine = hasAnyStreamProviders,
                                             onPlay = { handlePlayRequest(detail, targetEpisodeForPlay) },
+                                            onPlayLongClick = { handleLinkSheetRequest(detail, targetEpisodeForPlay) },
                                             onWatchlist = { showWatchlistSheet = true },
                                             onDownload = {
                                                 episodeToDownload = if (isTv) {
@@ -982,6 +1017,7 @@ fun MediaDetailsScreen(
                                                     hazeState = detailsHazeState,
                                                     onRowClick = { expandedEpisodeId = if (isExpanded) null else episode.id },
                                                     onPlayClick = { handlePlayRequest(detail, episode) },
+                                                    onPlayLongClick = { handleLinkSheetRequest(detail, episode) },
                                                     onDownloadClick = {
                                                         episodeToDownload = episode
                                                         showDownloadSheet = true
@@ -1266,6 +1302,22 @@ fun MediaDetailsScreen(
                     episodeToDownload = null
                 },
                 onDownloadStarted = { msg -> snackbarController.show(msg) }
+            )
+        }
+
+        // Stream Picker Bottom Sheet (long-press on Play)
+        if (showLinkSheet && successDetail != null) {
+            val detail = successDetail
+            LinkSelectionSheet(
+                detail = detail,
+                episode = linkSheetEpisode,
+                onDismiss = {
+                    showLinkSheet = false
+                    linkSheetEpisode = null
+                },
+                onStreamSelected = { stream ->
+                    handlePlayWithStream(detail, linkSheetEpisode, stream)
+                }
             )
         }
 
@@ -2194,6 +2246,7 @@ private fun DetailsActionBlock(
     downloads: List<DownloadItem> = emptyList(),
     hasStreamEngine: Boolean = true,
     onPlay: () -> Unit,
+    onPlayLongClick: (() -> Unit)? = null,
     onWatchlist: () -> Unit,
     onDownload: () -> Unit,
     onShare: () -> Unit,
@@ -2343,6 +2396,7 @@ private fun DetailsActionBlock(
             text = primaryLabel,
             icon = LucideIcons.Play,
             onClick = onPlay,
+            onLongClick = onPlayLongClick,
             isFaded = !hasStreamEngine,
             modifier = Modifier
                 .fillMaxWidth()
@@ -3177,6 +3231,7 @@ private fun EpisodeRowItem(
     hazeState: HazeState?,
     onRowClick: () -> Unit,
     onPlayClick: () -> Unit,
+    onPlayLongClick: (() -> Unit)? = null,
     onDownloadClick: () -> Unit,
     onToggleWatched: () -> Unit,
     onAddToPlaylist: () -> Unit,
@@ -3276,19 +3331,21 @@ private fun EpisodeRowItem(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Thumbnail: about 104 by 60 dp, 10 dp radius, with a 0.5 px hairline border
+                // Thumbnail: about 104 by 60 dp, 10 dp radius, with a 0.5 px hairline border.
+                // Long-press opens the stream picker for this episode; tap still plays.
+                // No conflict with the options dropdown: it is opened by its own
+                // more-options button, not by a long-press gesture.
                 Box(
                     modifier = Modifier
                         .size(width = 104.dp, height = 60.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .border(0.5.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(10.dp))
                         .background(Color(0xFF0F101A))
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
+                        .pressable(
                             role = Role.Button,
                             onClickLabel = "Play episode ${episode.episodeNumber}",
-                            onClick = onPlayClick
+                            onClick = onPlayClick,
+                            onLongClick = onPlayLongClick
                         )
                 ) {
                     AppAsyncImage(
@@ -3577,7 +3634,7 @@ private fun EpisodeRowItem(
                                 hazeState = hazeState,
                                 alphaFill = 0.14f
                             )
-                            .pressable(onClick = onPlayClick)
+                            .pressable(onClick = onPlayClick, onLongClick = onPlayLongClick)
                             .padding(horizontal = 14.dp),
                         contentAlignment = Alignment.Center
                     ) {

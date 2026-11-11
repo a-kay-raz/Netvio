@@ -679,7 +679,7 @@ fun AppNavHost(
                             )
                         )
                     },
-                    onPlayMedia = { detail, episode ->
+                    onPlayMedia = { detail, episode, streamKey ->
                         val prov = detail.provider ?: provider ?: "tmdb"
                         val firstEp = detail.episodes.firstOrNull()
                         val isTv = detail.type != com.euthopiar.core.model.MediaType.LIVE_TV &&
@@ -703,7 +703,8 @@ fun AppNavHost(
                                 mediaTitle = detail.title,
                                 episodeTitle = epTitle,
                                 season = season,
-                                episode = epNum
+                                episode = epNum,
+                                streamKey = streamKey
                             )
                         )
                     },
@@ -714,7 +715,7 @@ fun AppNavHost(
             }
 
             composable(
-                route = "player/{mediaId}?provider={provider}&type={type}&episodeData={episodeData}&mediaTitle={mediaTitle}&episodeTitle={episodeTitle}&season={season}&episode={episode}",
+                route = "player/{mediaId}?provider={provider}&type={type}&episodeData={episodeData}&mediaTitle={mediaTitle}&episodeTitle={episodeTitle}&season={season}&episode={episode}&streamKey={streamKey}",
                 arguments = listOf(
                     navArgument("mediaId") { type = NavType.StringType },
                     navArgument("provider") { type = NavType.StringType; nullable = true; defaultValue = null },
@@ -723,7 +724,8 @@ fun AppNavHost(
                     navArgument("mediaTitle") { type = NavType.StringType; nullable = true; defaultValue = null },
                     navArgument("episodeTitle") { type = NavType.StringType; nullable = true; defaultValue = null },
                     navArgument("season") { type = NavType.IntType; defaultValue = 0 },
-                    navArgument("episode") { type = NavType.IntType; defaultValue = 0 }
+                    navArgument("episode") { type = NavType.IntType; defaultValue = 0 },
+                    navArgument("streamKey") { type = NavType.StringType; nullable = true; defaultValue = null }
                 ),
                 enterTransition = { fadeIn(animationSpec = tween(200)) },
                 exitTransition = { fadeOut(animationSpec = tween(200)) },
@@ -745,6 +747,10 @@ fun AppNavHost(
                 val rawEpisode = backStackEntry.arguments?.getInt("episode") ?: 0
                 val season = if (isTv && rawSeason > 0) rawSeason else null
                 val episode = if (isTv && rawEpisode > 0) rawEpisode else null
+                // Pre-selected stream key from the long-press stream picker, if any.
+                // Navigation already percent-decodes query args once, matching the
+                // single rfc3986Encode applied in buildPlayerRoute, so read it as-is.
+                val streamKey = backStackEntry.arguments?.getString("streamKey")?.takeIf { it.isNotBlank() }
 
                 PlayerScreen(
                     mediaId = mediaId,
@@ -755,6 +761,7 @@ fun AppNavHost(
                     episodeTitle = episodeTitle,
                     initialSeason = season,
                     initialEpisode = episode,
+                    preselectedStreamKey = streamKey,
                     onBack = {
                         val currentEntry = navController.currentBackStackEntry
                         if (currentEntry != null && currentEntry.lifecycle.currentState != Lifecycle.State.RESUMED) {
@@ -1426,7 +1433,8 @@ internal fun buildPlayerRoute(
     mediaTitle: String? = null,
     episodeTitle: String? = null,
     season: Int = 0,
-    episode: Int = 0
+    episode: Int = 0,
+    streamKey: String? = null
 ): String {
     val safeId = mediaId.trim().ifBlank { "unknown" }
     val encodedMediaId = safeDoubleEncode(safeId)
@@ -1436,5 +1444,8 @@ internal fun buildPlayerRoute(
     val encodedEpData = episodeData?.let { rfc3986Encode(it) } ?: ""
     val encodedTitle = mediaTitle?.let { rfc3986Encode(it) } ?: ""
     val encodedEpTitle = episodeTitle?.let { rfc3986Encode(it) } ?: ""
-    return "player/$encodedMediaId?provider=$encodedProv&type=$typeStr&episodeData=$encodedEpData&mediaTitle=$encodedTitle&episodeTitle=$encodedEpTitle&season=$season&episode=$episode"
+    // Only present when a stream was picked in the long-press picker; a null key
+    // keeps the route byte-identical to the tap path.
+    val streamKeySuffix = streamKey?.takeIf { it.isNotBlank() }?.let { "&streamKey=${rfc3986Encode(it)}" } ?: ""
+    return "player/$encodedMediaId?provider=$encodedProv&type=$typeStr&episodeData=$encodedEpData&mediaTitle=$encodedTitle&episodeTitle=$encodedEpTitle&season=$season&episode=$episode$streamKeySuffix"
 }

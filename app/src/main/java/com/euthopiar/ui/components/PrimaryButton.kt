@@ -48,6 +48,7 @@ fun PrimaryButton(
     iconSize: androidx.compose.ui.unit.Dp = 20.dp,
     fontSize: TextUnit = 14.sp,
     fontWeight: FontWeight = FontWeight.Bold,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val backgroundColor = when {
         isFaded -> androidx.compose.ui.graphics.Color.White.copy(alpha = 0.38f)
@@ -67,6 +68,7 @@ fun PrimaryButton(
         enabled = enabled,
         scaleDown = EuthopiarMotionTokens.PressScaleLarge,
         onClickLabel = text,
+        onLongClick = onLongClick,
         onClick = onClick
     )
 

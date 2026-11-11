@@ -351,6 +351,11 @@ class PlayerViewModel(
     private var bufferingStallStartTime: Long? = null
     private var transientIoRetryCount: Int = 0
     private var userExplicitServerSelection: Boolean = false
+    // "addonId|url" key of the stream picked in the long-press stream picker, if any.
+    // While set, normal auto-pick is suppressed so the picked stream plays instead.
+    // Cleared once the picked stream starts, or when playback falls back to auto-pick.
+    private var preselectedStreamKey: String? = null
+    private var preselectedWatchdogJob: Job? = null
     private var isCurrentLiveStream: Boolean = false
     private var hasStartedPlayback: Boolean = false
     private var playbackStartTimestampMs: Long = 0L
@@ -1506,7 +1511,8 @@ class PlayerViewModel(
         epTitle: String? = null,
         season: Int? = null,
         episode: Int? = null,
-        year: Int? = null
+        year: Int? = null,
+        preselectedStreamKey: String? = null
     ) {
         val isTv = (type == MediaType.TV_SERIES || type == MediaType.ANIME) && type != MediaType.LIVE_TV
         val targetEpisodeData = when {
@@ -1526,6 +1532,12 @@ class PlayerViewModel(
         sourcePrepJob = null
         fastStartJob?.cancel()
         fastStartJob = null
+        preselectedWatchdogJob?.cancel()
+        preselectedWatchdogJob = null
+        // Register the picked stream BEFORE the getStreamFlow collect starts, so the
+        // match check in the SourceFound handler runs ahead of the 0ms prime-candidate
+        // auto-pick in the same emission.
+        this.preselectedStreamKey = preselectedStreamKey?.takeIf { it.isNotBlank() }
         failedServerIds.clear()
         failedAudioTrackIds.clear()
         activeRefreshableSource = null
@@ -1861,6 +1873,50 @@ class PlayerViewModel(
                 val collectedStreams = mutableListOf<StreamSource>()
                 val collectedSubtitles = mutableListOf<SubtitleTrack>()
 
+                // Pre-selected stream watchdog: while a picked stream is pending, the
+                // auto-pick below is suppressed so a slow scraper cannot steal the
+                // start. Bound the wait to 8s — the picked stream was already fetched
+                // once by the picker sheet, so it normally arrives within a second.
+                // After 8s play the picked stream if it arrived, else the best
+                // available server, exactly like the post-collect fallback.
+                if (preselectedStreamKey != null) {
+                    preselectedWatchdogJob = launch {
+                        delay(8_000L)
+                        if (!hasStartedPlayback && preselectedStreamKey != null) {
+                            val servers = _uiState.value.availableServers
+                            if (servers.isNotEmpty()) {
+                                val key = preselectedStreamKey
+                                val matched = key?.let { k ->
+                                    servers.firstOrNull { matchesPreselectedStreamKey(it.streamSource, k) }
+                                }
+                                val target = matched ?: run {
+                                    val watchdogHasDebrid = resolveUserHasDebrid()
+                                    val watchdogPref = preferencesRepository.defaultQuality.firstOrNull() ?: "Auto"
+                                    val watchdogHeight = when {
+                                        watchdogPref.contains("4K", ignoreCase = true) || watchdogPref.contains("2160", ignoreCase = true) -> 2160
+                                        watchdogPref.contains("720", ignoreCase = true) -> 720
+                                        else -> 1080
+                                    }
+                                    servers.filter { it.id !in failedServerIds && it.healthCategory != ServerHealthCategory.UNWATCHABLE }
+                                        .maxByOrNull { scoreServerForInitialAutoPlay(it, watchdogHasDebrid, watchdogHeight) }
+                                        ?: servers.firstOrNull { it.id !in failedServerIds }
+                                        ?: servers.firstOrNull()
+                                }
+                                if (target != null) {
+                                    if (matched != null) userExplicitServerSelection = true
+                                    preselectedStreamKey = null
+                                    hasStartedPlayback = true
+                                    playbackStartTimestampMs = System.currentTimeMillis()
+                                    withContext(Dispatchers.Main) {
+                                        _uiState.update { it.copy(isLoading = false, userError = null, errorMessage = null, selectedServer = target) }
+                                        playStreamSource(target.streamSource, collectedSubtitles, seekToPosition = resumePosition)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 val streamTitle = _uiState.value.mediaTitle.takeIf { it.isNotBlank() }
                 val candidateImdbId = currentImdbId ?: currentMediaId?.takeIf { it.startsWith("tt") }
                 val candidateMediaType = when (_uiState.value.mediaType) {
@@ -1914,9 +1970,15 @@ class PlayerViewModel(
                                     probeServerLatency(option)
                                 }
 
+                                // Pre-selected stream (long-press picker): play the picked stream
+                                // immediately when this emission is it, ahead of auto-pick below.
+                                playPreselectedIfMatch(option, collectedSubtitles, resumePosition)
+
                                 // FAST PLAYBACK: Readiness Window (450ms) & Auto-Start
                                 val curSelected = _uiState.value.selectedServer
-                                val needsStart = !userExplicitServerSelection && (!hasStartedPlayback || _uiState.value.errorMessage != null || _uiState.value.userError != null || (curSelected != null && curSelected.id in failedServerIds))
+                                // Suppressed while a picked stream is pending: the picked stream
+                                // must win over the 0ms prime candidate and the 450ms window.
+                                val needsStart = preselectedStreamKey == null && !userExplicitServerSelection && (!hasStartedPlayback || _uiState.value.errorMessage != null || _uiState.value.userError != null || (curSelected != null && curSelected.id in failedServerIds))
                                 if (needsStart) {
                                     val prefQualityStr = preferencesRepository.defaultQuality.firstOrNull() ?: "Auto"
                                     val prefHeight = when {
@@ -2096,8 +2158,11 @@ class PlayerViewModel(
                                             if (top8.any { it.id == option.id }) {
                                                 probeServerLatency(option)
                                             }
+                                            // Pre-selected stream (long-press picker): same match
+                                            // check as the main collect, ahead of auto-pick.
+                                            playPreselectedIfMatch(option, collectedSubtitles, resumePosition)
                                             val curSelected = _uiState.value.selectedServer
-                                            val needsStart = !userExplicitServerSelection && (!hasStartedPlayback || _uiState.value.errorMessage != null || _uiState.value.userError != null || (curSelected != null && curSelected.id in failedServerIds))
+                                            val needsStart = preselectedStreamKey == null && !userExplicitServerSelection && (!hasStartedPlayback || _uiState.value.errorMessage != null || _uiState.value.userError != null || (curSelected != null && curSelected.id in failedServerIds))
                                             if (needsStart) {
                                                 hasStartedPlayback = true
                                                 withContext(Dispatchers.Main) {
@@ -2172,10 +2237,20 @@ class PlayerViewModel(
                     val candidates = _uiState.value.availableServers.filter {
                         it.id !in failedServerIds && it.healthCategory != ServerHealthCategory.UNWATCHABLE
                     }
-                    val bestServer = candidates.maxByOrNull {
+                    // Pre-selected stream (long-press picker): if the picked stream arrived
+                    // but never matched during the collect (e.g. it came from the retry
+                    // flow), play it here. A stale key degrades gracefully to best-server
+                    // auto-pick.
+                    val preselectedKey = preselectedStreamKey
+                    val preselectedServer = preselectedKey?.let { key ->
+                        _uiState.value.availableServers.firstOrNull { matchesPreselectedStreamKey(it.streamSource, key) }
+                    }
+                    val bestServer = preselectedServer ?: candidates.maxByOrNull {
                         scoreServerForInitialAutoPlay(it, hasDebrid, prefHeight)
                     } ?: _uiState.value.availableServers.firstOrNull { it.id !in failedServerIds }
                     if (bestServer != null) {
+                        if (preselectedServer != null) userExplicitServerSelection = true
+                        preselectedStreamKey = null
                         hasStartedPlayback = true
                         withContext(Dispatchers.Main) {
                             _uiState.update { it.copy(isLoading = false, userError = null, errorMessage = null, selectedServer = bestServer) }
@@ -5883,6 +5958,7 @@ class PlayerViewModel(
         unregisterNetworkCallback()
         sourcePrepJob?.cancel()
         fastStartJob?.cancel()
+        preselectedWatchdogJob?.cancel()
         streamJob?.cancel()
         try {
             com.euthopiar.core.network.PlayerPlaybackNetworking.cancelLoopbackPlaybackCalls()
@@ -6034,6 +6110,59 @@ class PlayerViewModel(
                 opt.serverName.lowercase()
             }
         )
+    }
+
+    /**
+     * Pre-selected stream handoff (long-press stream picker): the details screen hands
+     * the player a "addonId|url" key built by StreamItem.preselectedStreamKey(). The URL
+     * component is the playable direct URL for direct streams and the effective
+     * magnet/hash for torrents, which is exactly what ProviderRepository puts into
+     * StreamSource.url — so addonId + url identifies the picked stream. The info-hash
+     * fallback covers magnet re-encoding differences between the two sides.
+     */
+    private fun matchesPreselectedStreamKey(source: StreamSource, key: String): Boolean {
+        val separator = key.indexOf('|')
+        if (separator <= 0) return false
+        val keyAddonId = key.substring(0, separator)
+        val keyUrl = key.substring(separator + 1)
+        if (keyUrl.isBlank()) return false
+        if (source.addonId != keyAddonId) return false
+        if (source.url == keyUrl) return true
+        val hashRegex = Regex("""xt=urn:btih:([a-zA-Z0-9]+)""", RegexOption.IGNORE_CASE)
+        val keyHash = hashRegex.find(keyUrl)?.groupValues?.getOrNull(1)
+        val sourceHash = source.infoHash?.takeIf { it.isNotBlank() }
+            ?: hashRegex.find(source.url)?.groupValues?.getOrNull(1)
+        return keyHash != null && sourceHash != null && keyHash.equals(sourceHash, ignoreCase = true)
+    }
+
+    /**
+     * Plays [option] immediately when it is the pre-selected stream, ahead of any
+     * auto-pick. Marks the selection explicit so the auto-upgrade and smart-failover
+     * paths never switch away from the stream the user picked. Returns true when it
+     * played the option, false when there is no pending pre-selection or no match.
+     * Must be called before the prime-candidate / 450ms auto-pick in the same emission.
+     */
+    private suspend fun playPreselectedIfMatch(
+        option: ServerSourceOption,
+        collectedSubtitles: List<SubtitleTrack>,
+        resumePosition: Long?
+    ): Boolean {
+        val key = preselectedStreamKey ?: return false
+        if (hasStartedPlayback || !matchesPreselectedStreamKey(option.streamSource, key)) return false
+        preselectedWatchdogJob?.cancel()
+        preselectedWatchdogJob = null
+        fastStartJob?.cancel()
+        fastStartJob = null
+        userExplicitServerSelection = true
+        hasStartedPlayback = true
+        playbackStartTimestampMs = System.currentTimeMillis()
+        preselectedStreamKey = null
+        android.util.Log.i("PlayerViewModel", "Playing pre-selected stream ${option.label}")
+        withContext(Dispatchers.Main) {
+            _uiState.update { it.copy(isLoading = false, userError = null, errorMessage = null, selectedServer = option) }
+            playStreamSource(option.streamSource, collectedSubtitles, seekToPosition = resumePosition)
+        }
+        return true
     }
 
     private fun computeTransportKey(source: StreamSource): String {
