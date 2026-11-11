@@ -28,7 +28,7 @@ jobs:
       - name: Grant Execute Permission for Gradlew
         run: chmod +x gradlew
 
-      - name: Build Universal Release APK
+      - name: Build Release APKs (arm64-v8a + armeabi-v7a)
         run: ./gradlew assembleRelease --no-daemon
 
       - name: Create GitHub Release
