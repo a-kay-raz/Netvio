@@ -12,8 +12,10 @@ import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.bitmapConfig
 import coil3.request.crossfade
 import com.euthopiar.app.plugin.PluginRepositoryService
+import com.euthopiar.core.addons.CatalogPreferenceProvider
 import com.euthopiar.core.network.DohDns
 import com.euthopiar.core.registry.PluginRegistry
+import com.euthopiar.core.repository.ProviderRepository
 import com.euthopiar.core.util.AppSessionManager
 import com.euthopiar.data.preferences.PreferencesRepository
 import kotlinx.coroutines.CoroutineScope
@@ -41,6 +43,13 @@ class EuthopiarApp : Application(), SingletonImageLoader.Factory {
         com.euthopiar.core.p2p.P2pStreamingEngine.initialize(this)
         com.euthopiar.core.p2p.P2pSettingsRepository.initialize(this)
         com.euthopiar.core.browser.HeadlessWebResolver.getInstance(this)
+
+        // Feed the saved Catalog Manager preferences into the home catalog
+        // pipeline so Home reflects the user's row order, visibility and names.
+        ProviderRepository.Default.catalogPreferenceProvider =
+            CatalogPreferenceProvider {
+                PreferencesRepository.getInstance(this@EuthopiarApp).getCatalogPreferences()
+            }
 
         // Initialize plugins, prefetch DNS, and restore default selected provider across restarts
         CoroutineScope(Dispatchers.IO).launch {

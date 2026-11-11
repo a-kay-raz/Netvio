@@ -117,6 +117,15 @@ fun getAllSettingsSearchEntries(): List<SettingsSearchEntry> = listOf(
         icon = Icons.Outlined.Public
     ),
     SettingsSearchEntry(
+        id = "reorder_catalogs",
+        title = "Reorder Catalogs",
+        description = "Change home row order, hide rows and rename catalogs",
+        category = SettingsCategory.General,
+        page = SettingsPage.Catalogs,
+        keywords = listOf("catalog", "home", "rows", "reorder", "hide", "rename", "order"),
+        icon = Icons.Outlined.List
+    ),
+    SettingsSearchEntry(
         id = "section_header_style",
         title = "Section Header Style",
         description = "Switch catalog section ornamentation (Accent bar, Eyebrow, Rule line)",

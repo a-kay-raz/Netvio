@@ -27,6 +27,51 @@ open class ProviderRepository(
     val plugins: StateFlow<List<UniversalPlugin>> get() = registry.plugins
 
     /**
+     * Saved catalog preferences supplied by the app module (see
+     * [CatalogPreferenceProvider]). Null means no preferences were saved yet,
+     * in which case every catalog is on Home in manifest order.
+     */
+    var catalogPreferenceProvider: CatalogPreferenceProvider? = null
+
+    private suspend fun readCatalogPreferences(): Map<String, CatalogPreference> {
+        val provider = catalogPreferenceProvider ?: return emptyMap()
+        return try {
+            provider.snapshot()
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    /**
+     * Returns every catalog definition of the currently enabled Stremio
+     * addons, in manifest order. Used by the Catalog Manager; unlike the home
+     * rails this is not filtered by saved visibility.
+     */
+    suspend fun getCatalogDefinitions(): List<HomeCatalogDefinition> = withContext(Dispatchers.IO) {
+        buildHomeCatalogDefinitions(readyEnabledAddons())
+    }
+
+    /** Enabled addons with a loaded manifest, refreshing stale manifests first. */
+    private suspend fun readyEnabledAddons(): List<ManagedAddon> {
+        val addonRepo = com.euthopiar.core.addons.AddonRepository.getInstanceOrNull() ?: return emptyList()
+        val enabledAddons = addonRepo.uiState.value.addons.filter { it.enabled }
+        if (enabledAddons.isEmpty()) return emptyList()
+
+        return enabledAddons.map { addon ->
+            if (addon.manifest == null) {
+                try {
+                    addonRepo.refreshAddon(addon.manifestUrl)
+                    addonRepo.uiState.value.addons.firstOrNull { it.manifestUrl == addon.manifestUrl } ?: addon
+                } catch (_: Exception) {
+                    addon
+                }
+            } else {
+                addon
+            }
+        }.filter { it.manifest != null }
+    }
+
+    /**
      * Fetches the home catalog rows. Fetches canonical TMDB core rows first (Trending, Popular),
      * then dynamically fetches and appends enabled Stremio addon catalog rails.
      */
@@ -70,27 +115,17 @@ open class ProviderRepository(
     }
 
     private suspend fun fetchStremioCatalogRails(offset: Int, limit: Int): List<CatalogRow> = withContext(Dispatchers.IO) {
-        val addonRepo = com.euthopiar.core.addons.AddonRepository.getInstanceOrNull() ?: return@withContext emptyList()
-        val enabledAddons = addonRepo.uiState.value.addons.filter { it.enabled }
-        if (enabledAddons.isEmpty()) return@withContext emptyList()
-
-        val readyAddons = enabledAddons.map { addon ->
-            if (addon.manifest == null) {
-                try {
-                    addonRepo.refreshAddon(addon.manifestUrl)
-                    addonRepo.uiState.value.addons.firstOrNull { it.manifestUrl == addon.manifestUrl } ?: addon
-                } catch (_: Exception) {
-                    addon
-                }
-            } else {
-                addon
-            }
-        }.filter { it.manifest != null }
-
+        val readyAddons = readyEnabledAddons()
         if (readyAddons.isEmpty()) return@withContext emptyList()
 
-        val allDefs = com.euthopiar.core.addons.buildHomeCatalogDefinitions(readyAddons)
-        val targetDefs = allDefs.drop(offset).take(limit)
+        val preferences = readCatalogPreferences()
+        val orderedDefs = orderCatalogDefinitions(buildHomeCatalogDefinitions(readyAddons), preferences)
+        // Hidden catalogs stay out of Home rails (they remain searchable) and
+        // the drop/take window follows the user-ordered list, so progressive
+        // loading continues exactly where the first batch stopped.
+        val targetDefs = orderedDefs
+            .filter { preferences[it.key]?.onHome != false }
+            .drop(offset).take(limit)
         if (targetDefs.isEmpty()) return@withContext emptyList()
 
         coroutineScope {
@@ -108,10 +143,11 @@ open class ProviderRepository(
                                 )
                                 if (parsed.isNotEmpty()) {
                                     CatalogRow(
-                                        title = def.defaultTitle,
+                                        title = resolveCatalogTitle(def, preferences),
                                         items = parsed,
                                         subtitle = def.addonName,
-                                        eyebrow = def.type.uppercase()
+                                        eyebrow = def.type.uppercase(),
+                                        catalogKey = def.key
                                     )
                                 } else null
                             } else null

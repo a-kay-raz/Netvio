@@ -91,6 +91,7 @@ class ConfigurationBackupManager(private val context: Context) {
             "section_label_style" to KeyType.STRING,
             "long_press_style" to KeyType.STRING,
             "media_reactions" to KeyType.STRING,
+            "catalog_preferences" to KeyType.STRING,
             "active_debrid_provider" to KeyType.STRING,
             "trakt_username" to KeyType.STRING,
             "skipped_update_version" to KeyType.STRING,

@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
+import com.euthopiar.core.addons.CatalogPreference
 import com.euthopiar.core.model.ContentRegionPreset
 import com.euthopiar.core.sync.supabase.SupabaseSession
 import com.euthopiar.ui.longpress.LongPressSheetStyle
@@ -13,6 +14,8 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.IOException
 
 val Context.preferencesDataStore: DataStore<Preferences> by preferencesDataStore(name = "euthopiar_settings")
@@ -137,6 +140,7 @@ class PreferencesRepository private constructor(private val context: Context) {
         val SECTION_LABEL_STYLE = stringPreferencesKey("section_label_style")
         val LONG_PRESS_STYLE = stringPreferencesKey("long_press_style")
         val MEDIA_REACTIONS = stringPreferencesKey("media_reactions")
+        val CATALOG_PREFERENCES = stringPreferencesKey("catalog_preferences")
         val PLAYBACK_BUFFER_SIZE_MB = intPreferencesKey("playback_buffer_size_mb")
         val HARDWARE_ACCELERATION_ENABLED = booleanPreferencesKey("hardware_acceleration_enabled")
         val AMOLED_MODE = booleanPreferencesKey("amoled_mode")
@@ -813,6 +817,30 @@ class PreferencesRepository private constructor(private val context: Context) {
         com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
     }
 
+    /**
+     * Saved Catalog Manager preferences, keyed by [CatalogPreference.catalogKey].
+     * Stored as one JSON array string so the whole order/visibility map is
+     * written atomically. A blank or malformed value reads as no preferences.
+     */
+    val catalogPreferences: Flow<Map<String, CatalogPreference>> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            parseCatalogPreferences(preferences[PreferencesKeys.CATALOG_PREFERENCES] ?: "")
+        }
+        .distinctUntilChanged()
+
+    suspend fun getCatalogPreferences(): Map<String, CatalogPreference> =
+        catalogPreferences.first()
+
+    suspend fun saveCatalogPreferences(preferences: Map<String, CatalogPreference>) {
+        context.preferencesDataStore.edit { prefs ->
+            prefs[PreferencesKeys.CATALOG_PREFERENCES] = encodeCatalogPreferences(preferences)
+        }
+        com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
+    }
+
     val reduceMotion: Flow<Boolean> = context.preferencesDataStore.data
         .catch { exception ->
             if (exception is IOException) emit(emptyPreferences()) else throw exception
@@ -1406,6 +1434,9 @@ class PreferencesRepository private constructor(private val context: Context) {
         prefs[PreferencesKeys.DISABLED_PLUGINS]?.let { disabled ->
             if (disabled.isNotEmpty()) result["disabled_plugins"] = disabled.joinToString(",")
         }
+        prefs[PreferencesKeys.CATALOG_PREFERENCES]?.let { raw ->
+            if (raw.isNotBlank()) result["catalog_preferences"] = raw
+        }
         return result
     }
 
@@ -1483,6 +1514,11 @@ class PreferencesRepository private constructor(private val context: Context) {
                 val remoteDisabled = remoteDisabledCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
                 prefs[PreferencesKeys.DISABLED_PLUGINS] = remoteDisabled
             }
+
+            // Catalog Manager preferences sync last-write-wins as one JSON value.
+            settings["catalog_preferences"]?.let { raw ->
+                if (raw.isNotBlank()) prefs[PreferencesKeys.CATALOG_PREFERENCES] = raw
+            }
         }
     }
 
@@ -1508,4 +1544,47 @@ class PreferencesRepository private constructor(private val context: Context) {
             }
         }
     }
+}
+
+/**
+ * Parses the stored Catalog Manager preferences JSON. Entries are objects
+ * with "k" (catalog key), "home" (on Home), "order" (order index) and an
+ * optional "title" (custom title). Malformed input yields no preferences
+ * rather than failing the settings load.
+ */
+private fun parseCatalogPreferences(raw: String): Map<String, CatalogPreference> {
+    if (raw.isBlank()) return emptyMap()
+    return try {
+        val result = mutableMapOf<String, CatalogPreference>()
+        val array = JSONArray(raw)
+        for (i in 0 until array.length()) {
+            val entry = array.optJSONObject(i) ?: continue
+            val key = entry.optString("k", "")
+            if (key.isBlank()) continue
+            result[key] = CatalogPreference(
+                catalogKey = key,
+                onHome = entry.optBoolean("home", true),
+                orderIndex = entry.optInt("order", Int.MAX_VALUE),
+                customTitle = entry.optString("title", "").takeIf { it.isNotBlank() }
+            )
+        }
+        result
+    } catch (_: Exception) {
+        emptyMap()
+    }
+}
+
+private fun encodeCatalogPreferences(preferences: Map<String, CatalogPreference>): String {
+    val array = JSONArray()
+    preferences.values
+        .filter { it.catalogKey.isNotBlank() }
+        .forEach { preference ->
+            val entry = JSONObject()
+            entry.put("k", preference.catalogKey)
+            entry.put("home", preference.onHome)
+            entry.put("order", preference.orderIndex)
+            preference.customTitle?.takeIf { it.isNotBlank() }?.let { entry.put("title", it) }
+            array.put(entry)
+        }
+    return array.toString()
 }

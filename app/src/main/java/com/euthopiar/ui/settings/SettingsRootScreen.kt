@@ -434,6 +434,18 @@ fun SettingsRootScreen(
                             onClick = { onNavigateToPage(SettingsPage.Appearance.route) }
                         )
                     }
+                    SettingsRowHairline()
+                }
+
+                item(key = "row_catalogs") {
+                    StaggeredEnterRow(index = 3, isAnimated = hasAnimatedEnter, reduceMotion = reduceMotion) {
+                        SettingsHairlineRow(
+                            title = SettingsPage.Catalogs.title,
+                            subtitle = SettingsPage.Catalogs.subtitle,
+                            icon = SettingsPage.Catalogs.icon,
+                            onClick = { onNavigateToPage(SettingsPage.Catalogs.route) }
+                        )
+                    }
                     Spacer(modifier = Modifier.height(26.dp))
                 }
 

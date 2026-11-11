@@ -335,8 +335,9 @@ class HomeViewModel(
         viewModelScope.launch {
             combine(
                 repository.activePlugin,
-                preferencesRepository.contentRegionPreset
-            ) { plugin, preset ->
+                preferencesRepository.contentRegionPreset,
+                preferencesRepository.catalogPreferences
+            ) { plugin, preset, _ ->
                 plugin.name to preset
             }.collect { (pluginName, preset) ->
                 if (lastPluginName != pluginName) {
@@ -537,11 +538,15 @@ class HomeViewModel(
                     (heroWithLogos + heroCandidatesPool.filter { it.logoUrl.isNullOrBlank() }).take(6)
                 }
 
-                // 5. Keep regional/core rows pinned at the top; permute secondary discovery rows and rotate item offsets
+                // 5. Keep regional/core rows pinned at the top; permute secondary discovery rows and rotate item offsets.
+                // Stremio rows (catalogKey != null) keep the Catalog Manager order
+                // and are never shuffled, so Home reflects the saved row order.
                 val processedRows = if (rows.size > pinnedCoreCount) {
                     val pinnedRows = rows.take(pinnedCoreCount)
-                    val otherRows = rows.drop(pinnedCoreCount).shuffled(providerRandom)
-                    pinnedRows + otherRows.map { row ->
+                    val otherRows = rows.drop(pinnedCoreCount)
+                    val shuffledRows = otherRows.filter { it.catalogKey == null }.shuffled(providerRandom)
+                    val orderedCatalogRows = otherRows.filter { it.catalogKey != null }
+                    pinnedRows + (shuffledRows + orderedCatalogRows).map { row ->
                         if (row.items.size > 4) {
                             val offset = providerRandom.nextInt(row.items.size)
                             row.copy(items = row.items.drop(offset) + row.items.take(offset))

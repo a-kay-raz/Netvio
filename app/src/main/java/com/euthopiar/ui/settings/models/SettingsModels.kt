@@ -59,6 +59,13 @@ enum class SettingsPage(
         category = SettingsCategory.General,
         icon = androidx.compose.material.icons.Icons.Outlined.Tune
     ),
+    Catalogs(
+        route = "settings/catalogs",
+        title = "Reorder Catalogs",
+        subtitle = "Home rows order, visibility and names",
+        category = SettingsCategory.General,
+        icon = androidx.compose.material.icons.Icons.Outlined.List
+    ),
     Integrations(
         route = "settings/integrations",
         title = "Integrations",

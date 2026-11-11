@@ -65,7 +65,14 @@ data class CatalogRow(
     val title: String,
     val items: List<MediaItem>,
     val subtitle: String? = null,
-    val eyebrow: String? = null
+    val eyebrow: String? = null,
+    /**
+     * Key of the Stremio addon catalog this row came from
+     * (HomeCatalogDefinition.key), or null for built-in rows such as TMDB.
+     * The Catalog Manager uses it to apply the saved order, visibility and
+     * custom title; rows without a key are never reordered by it.
+     */
+    val catalogKey: String? = null
 )
 
 @Immutable

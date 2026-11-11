@@ -1027,6 +1027,46 @@ fun AppNavHost(
             }
 
             composable(
+                route = "settings/catalogs",
+                enterTransition = {
+                    if (reduceMotion) fadeIn(animationSpec = tween(180)) else slideInHorizontally(
+                        initialOffsetX = { it },
+                        animationSpec = tween(280, easing = FastOutSlowInEasing)
+                    ) + fadeIn(animationSpec = tween(200))
+                },
+                exitTransition = {
+                    if (reduceMotion) {
+                        fadeOut(animationSpec = tween(180))
+                    } else {
+                        slideOutHorizontally(
+                            targetOffsetX = { -it / 4 },
+                            animationSpec = tween(280, easing = FastOutSlowInEasing)
+                        ) + fadeOut(animationSpec = tween(200))
+                    }
+                },
+                popEnterTransition = {
+                    if (reduceMotion) {
+                        fadeIn(animationSpec = tween(180))
+                    } else {
+                        slideInHorizontally(
+                            initialOffsetX = { -it / 4 },
+                            animationSpec = tween(250, easing = FastOutSlowInEasing)
+                        ) + fadeIn(animationSpec = tween(200))
+                    }
+                },
+                popExitTransition = {
+                    if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
+                        targetOffsetX = { it },
+                        animationSpec = tween(160, easing = FastOutSlowInEasing)
+                    ) + fadeOut(animationSpec = tween(140))
+                }
+            ) {
+                com.euthopiar.ui.settings.pages.CatalogManagerPage(
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable(
                 route = "settings/integrations",
                 enterTransition = {
                     if (reduceMotion) fadeIn(animationSpec = tween(180)) else slideInHorizontally(
