@@ -1904,7 +1904,7 @@ class PlayerViewModel(
                                 }
                                 if (target != null) {
                                     if (matched != null) userExplicitServerSelection = true
-                                    this.preselectedStreamKey = null
+                                    this@PlayerViewModel.preselectedStreamKey = null
                                     hasStartedPlayback = true
                                     playbackStartTimestampMs = System.currentTimeMillis()
                                     withContext(Dispatchers.Main) {
@@ -2250,7 +2250,7 @@ class PlayerViewModel(
                     } ?: _uiState.value.availableServers.firstOrNull { it.id !in failedServerIds }
                     if (bestServer != null) {
                         if (preselectedServer != null) userExplicitServerSelection = true
-                        this.preselectedStreamKey = null
+                        this@PlayerViewModel.preselectedStreamKey = null
                         hasStartedPlayback = true
                         withContext(Dispatchers.Main) {
                             _uiState.update { it.copy(isLoading = false, userError = null, errorMessage = null, selectedServer = bestServer) }
