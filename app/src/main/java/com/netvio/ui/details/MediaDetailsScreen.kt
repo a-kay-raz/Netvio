@@ -396,11 +396,29 @@ fun MediaDetailsScreen(
                 label = "MediaDetailsTransition"
             ) { state ->
             when (state) {
-                // No loading screen by design: a poster tap goes straight to the
-                // details page the moment it is ready, with no splash, logo or
-                // loading background in between.
+                // No loading screen: the details page shell (hero + title from
+                // the navigation args) renders immediately, so a poster tap
+                // slides straight into the details page with no black flash
+                // in between. The rest fills in when the fetch returns.
                 is MediaDetailsUiState.Loading -> {
-                    Box(modifier = Modifier.fillMaxSize())
+                    val shellTitle = state.title ?: initialTitle ?: ""
+                    val shellPoster = state.posterUrl ?: initialPosterUrl
+                    val shellLogo = state.logoUrl ?: initialLogoUrl
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        DetailsBackdropHero(
+                            backdropUrl = shellPoster,
+                            logoUrl = shellLogo,
+                            title = shellTitle
+                        )
+                        DetailsTitleHeader(
+                            title = shellTitle,
+                            logoUrl = shellLogo,
+                            modifier = Modifier.padding(
+                                horizontal = Dimens.spacing16,
+                                vertical = Dimens.spacing16
+                            )
+                        )
+                    }
                 }
 
                 is MediaDetailsUiState.Error -> {
