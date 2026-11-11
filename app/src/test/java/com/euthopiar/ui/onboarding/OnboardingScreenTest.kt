@@ -31,11 +31,12 @@ class OnboardingScreenTest {
             }
         }
 
-        // Page 0: Get started should be displayed
-        composeTestRule.onNodeWithText("Get started").assertIsDisplayed()
+        // Page 0: Continue as Guest should be displayed (the old "Get started"
+        // pill was replaced by Google Sign-In + guest fallback)
+        composeTestRule.onNodeWithText("Continue as Guest").assertIsDisplayed()
 
-        // Click Get started to go to Page 1
-        composeTestRule.onNodeWithText("Get started").performClick()
+        // Click Continue as Guest to go to Page 1
+        composeTestRule.onNodeWithText("Continue as Guest").performClick()
         composeTestRule.waitForIdle()
 
         // Page 1: Check Back and Continue

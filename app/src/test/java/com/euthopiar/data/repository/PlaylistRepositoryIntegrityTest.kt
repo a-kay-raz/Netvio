@@ -109,11 +109,13 @@ class PlaylistRepositoryIntegrityTest {
         assertEquals(1, afterRemove.items.size)
         assertEquals("tv_202", afterRemove.items[0].mediaId)
 
-        // Delete playlist
+        // Delete playlist. deletePlaylist() soft-deletes: the playlist stays in
+        // userPlaylists as a tombstone (isDeleted = true) so cloud sync can
+        // propagate the deletion, so assert against the user-visible list.
         repo.deletePlaylist(playlist.id)
         kotlinx.coroutines.delay(200)
 
-        val afterDelete = repo.userPlaylists.value
+        val afterDelete = repo.getUserPlaylists()
         assertTrue(afterDelete.none { it.id == playlist.id })
     }
 }

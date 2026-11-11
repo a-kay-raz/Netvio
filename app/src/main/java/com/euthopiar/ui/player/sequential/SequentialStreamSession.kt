@@ -388,8 +388,12 @@ class SequentialStreamSession(
             spaceAvailable.signalAll()
 
             while (highWaterMark <= position && !isClosed) {
-                streamError?.let { throw it }
+                // EOF is terminal: once the session is marked finished, report
+                // end-of-stream instead of a stale pipe error (e.g. a failed
+                // background fetch for an unreachable host racing with the
+                // EOF signal). A pipe error still surfaces whenever EOF is false.
                 if (isEof || (totalContentLength in 1..position)) return -1
+                streamError?.let { throw it }
                 dataArrived.await()
             }
             if (isClosed) throw IOException("Sequential stream session closed")

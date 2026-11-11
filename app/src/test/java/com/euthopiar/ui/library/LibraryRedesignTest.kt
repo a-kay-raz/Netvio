@@ -87,7 +87,10 @@ class LibraryRedesignTest {
         assertTrue(repo.userPlaylists.value.any { it.id == pl.id })
 
         repo.deletePlaylist(pl.id)
-        assertFalse(repo.userPlaylists.value.any { it.id == pl.id })
+        // deletePlaylist() soft-deletes (tombstone with isDeleted = true, kept for
+        // cloud sync), so the deleted playlist must be gone from the
+        // user-visible list, not necessarily from the raw backing flow.
+        assertFalse(repo.getUserPlaylists().any { it.id == pl.id })
     }
 
     @Test

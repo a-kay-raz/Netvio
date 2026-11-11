@@ -41,9 +41,27 @@ class StreamingPlaybackRegressionTest {
         override fun close() {}
     }
 
+    companion object {
+        // Minimal synthetic DASH manifest reproducing the real-world Vidstuck case:
+        // unescaped ampersands in a query string and an hev1 codec string.
+        // Kept in-source so the tests run on any machine: the previous fixture
+        // was read from a hardcoded author-machine path
+        // (c:/Euthopiar/scratch/orion_manifest.mpd) that does not exist on CI.
+        private const val RAW_MPD = """<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT30S" minBufferTime="PT1.5S" profiles="urn:mpeg:dash:profile:isoff-live:2011">
+  <Period duration="PT30S">
+    <AdaptationSet mimeType="video/mp4" contentType="video" segmentAlignment="true">
+      <Representation id="v1" bandwidth="2000000" codecs="hev1.1.6.L120.90" width="1920" height="1080" frameRate="30">
+        <BaseURL>https://cdn.example.com/video/init.mp4?token=abc&Signature=xyz&Key-Pair-Id=123</BaseURL>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"""
+    }
+
     @Test
     fun testResponseHeaderOverridingDataSourceSanitizesDashManifestAndNormalizesCodecs() {
-        val rawMpd = java.io.File("c:/Euthopiar/scratch/orion_manifest.mpd").readText(Charsets.UTF_8)
+        val rawMpd = RAW_MPD
         val dummyUri = Uri.parse("https://vidstuck.cc/backend/database/andromeda?ext=manifest.mpd")
         val fakeUpstream = FakeUpstreamDataSource(
             uri = dummyUri,
@@ -75,7 +93,7 @@ class StreamingPlaybackRegressionTest {
 
     @Test
     fun testDashManifestParserRawVsSanitized() {
-        val rawMpd = java.io.File("c:/Euthopiar/scratch/orion_manifest.mpd").readText(Charsets.UTF_8)
+        val rawMpd = RAW_MPD
         val parser = androidx.media3.exoplayer.dash.manifest.DashManifestParser()
         val dummyUri = Uri.parse("https://vidstuck.cc/backend/database/andromeda?ext=manifest.mpd")
 
