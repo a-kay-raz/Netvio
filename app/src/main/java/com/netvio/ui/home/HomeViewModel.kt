@@ -655,7 +655,7 @@ class HomeViewModel(
                             item.type == com.netvio.core.model.MediaType.ANIME
                         try {
                             com.netvio.core.util.TmdbBridge.fetchEnrichedDetails(
-                                client = com.netvio.core.util.DohDns.metadataClient,
+                                client = com.netvio.core.network.DohDns.metadataClient,
                                 tmdbId = cleanId,
                                 isTv = isTv,
                                 providerName = "tmdb"
