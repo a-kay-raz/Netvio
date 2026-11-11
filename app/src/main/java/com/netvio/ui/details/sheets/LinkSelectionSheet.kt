@@ -2,7 +2,6 @@ package com.netvio.ui.details.sheets
 
 import android.widget.Toast
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -71,7 +70,6 @@ import com.netvio.core.streams.StreamsRepository
 import com.netvio.core.streams.sortedForGroupedDisplay
 import com.netvio.ui.details.downloads.DownloadTokens
 import com.netvio.ui.theme.AppFontFamily
-import com.netvio.ui.theme.SurfaceLow
 import com.netvio.ui.theme.pressable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
