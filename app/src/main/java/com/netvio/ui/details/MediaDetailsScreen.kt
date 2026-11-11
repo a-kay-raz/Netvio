@@ -6,6 +6,8 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.drawable.BitmapDrawable
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -35,6 +37,7 @@ import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -163,6 +166,7 @@ import com.netvio.ui.components.VelvetAlertDialog
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
+import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.request.transformations
@@ -1959,6 +1963,12 @@ private fun DetailsBackdropHero(
 
 /**
  * Title Header: Clear PNG logo or styled heading title (medium weight, no bold).
+ *
+ * The title text shows immediately. When a logo URL is present, the logo loads
+ * in the background and replaces the text only if it is light enough to be
+ * seen on this screen's black background. Some TMDB logos are dark text on a
+ * transparent background (e.g. Binnelanders: pure black), which would otherwise
+ * render as an invisible logo and leave the title area a blank gap.
  */
 @Composable
 private fun DetailsTitleHeader(
@@ -1969,16 +1979,27 @@ private fun DetailsTitleHeader(
 ) {
     val context = LocalContext.current
     val cleanTitle = remember(title) { sanitizeTitle(title) }
+    // null = logo still loading (or no logo): show the title text.
+    // true = light logo: show it. false = dark or failed logo: keep the text.
+    var logoUsable by remember(logoUrl) { mutableStateOf<Boolean?>(null) }
+    val logoPainter = rememberAsyncImagePainter(
+        model = ImageRequest.Builder(context)
+            .data(logoUrl)
+            .crossfade(220)
+            .transformations(TrimTransparentTransformation())
+            .build(),
+        onSuccess = { result ->
+            val bitmap = (result.drawable as? BitmapDrawable)?.bitmap
+            logoUsable = bitmap?.let { !it.isMostlyDark() } ?: true
+        },
+        onError = { logoUsable = false }
+    )
     Box(
         modifier = modifier.graphicsLayer { this.alpha = alphaProvider() }
     ) {
-        if (!logoUrl.isNullOrBlank()) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(logoUrl)
-                    .crossfade(220)
-                    .transformations(TrimTransparentTransformation())
-                    .build(),
+        if (logoUsable == true) {
+            Image(
+                painter = logoPainter,
                 contentDescription = cleanTitle,
                 modifier = Modifier
                     .heightIn(min = 40.dp, max = 64.dp)
@@ -1999,6 +2020,40 @@ private fun DetailsTitleHeader(
             )
         }
     }
+}
+
+/**
+ * True when the bitmap's visible (opaque) pixels are mostly dark, i.e. the
+ * image would be invisible on a black background. Samples opaque pixels on a
+ * stride so large logos stay cheap.
+ */
+private fun Bitmap.isMostlyDark(): Boolean {
+    val w = width
+    val h = height
+    if (w <= 0 || h <= 0) return false
+    val strideX = maxOf(1, w / 60)
+    val strideY = maxOf(1, h / 60)
+    var sum = 0.0
+    var count = 0
+    var x = 0
+    while (x < w) {
+        var y = 0
+        while (y < h) {
+            val pixel = getPixel(x, y)
+            val alpha = (pixel ushr 24) and 0xFF
+            if (alpha > 30) {
+                val r = (pixel shr 16) and 0xFF
+                val g = (pixel shr 8) and 0xFF
+                val b = pixel and 0xFF
+                sum += (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+                count++
+            }
+            y += strideY
+        }
+        x += strideX
+    }
+    if (count == 0) return false
+    return (sum / count) < 0.4
 }
 
 /**
