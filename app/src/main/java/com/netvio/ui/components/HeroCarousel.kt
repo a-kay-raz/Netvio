@@ -195,7 +195,7 @@ fun HeroCarousel(
     } else {
         (configuration.screenHeightDp * 0.60f + 40f).coerceIn(480f, 600f).dp
     }
-    val contentBottomPadding = if (isLandscape && !isLargeScreen) Dimens.spacing12 else Dimens.spacing24
+    val contentBottomPadding = Dimens.spacing12
     val heroWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
     val maxStretchPx = with(density) { 180.dp.toPx() }
 

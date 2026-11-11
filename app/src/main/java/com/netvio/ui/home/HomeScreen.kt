@@ -433,7 +433,7 @@ fun HomeScreen(
                                         },
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .padding(vertical = Dimens.spacing8)
+                                            .padding(vertical = Dimens.spacing4)
                                     )
                                 }
                             }

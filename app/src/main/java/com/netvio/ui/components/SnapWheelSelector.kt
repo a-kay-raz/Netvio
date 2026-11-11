@@ -207,7 +207,7 @@ fun SnapWheelSelector(
                     modifier = Modifier
                         .width(itemWidth)
                         .fillMaxHeight()
-                        .defaultMinSize(minHeight = 48.dp)
+                        .defaultMinSize(minHeight = 40.dp)
                         .semantics {
                             this.role = Role.Tab
                             this.selected = (index == selectedIndex)

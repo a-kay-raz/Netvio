@@ -102,13 +102,13 @@ object CardDimensions {
 
     /**
      * Top spacing above a catalogue section header (inter-rail visual separation).
-     * Follows the craft-floor law of proximity: substantially more space above a header
-     * than between the header and its own cards below.
+     * Kept tight on purpose: the header sits close to the rail above it so the
+     * feed reads as one continuous list instead of spaced-out blocks.
      */
     fun railTopSpacing(mode: CardScaleMode): Dp = when (mode) {
-        CardScaleMode.COMPACT -> 16.dp
-        CardScaleMode.BALANCED -> 20.dp
-        CardScaleMode.FLAGSHIP -> 24.dp
+        CardScaleMode.COMPACT -> 10.dp
+        CardScaleMode.BALANCED -> 12.dp
+        CardScaleMode.FLAGSHIP -> 14.dp
     }
 
     /**
