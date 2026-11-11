@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
@@ -292,9 +294,9 @@ fun LinkSelectionContent(
         }
     }
 
-    // Per-addon boxes can be collapsed from the card header. Session-only:
-    // nothing is persisted, so every sheet open starts fully expanded.
-    var collapsedAddonIds by remember { mutableStateOf(emptySet<String>()) }
+    // Addons are toggled from the chip row below the best match. Session-only:
+    // nothing is persisted, so every sheet open starts with all addons collapsed.
+    var expandedAddonIds by remember { mutableStateOf(emptySet<String>()) }
 
     Column(
         modifier = modifier
@@ -461,70 +463,101 @@ fun LinkSelectionContent(
                         }
                     }
 
-                    // Each addon gets its own box, managed from the box header (collapse/expand).
-                    displayGroups.forEach { group ->
-                        item(key = "link_group_${group.addonId}") {
-                            val isCollapsed = group.addonId in collapsedAddonIds
-                            Column(modifier = Modifier.fillMaxWidth()) {
-                                Column(
+                    // Addons in one row of chips just below the best match.
+                    // Tap a chip to expand that addon's links full-width below
+                    // the row; tap again to collapse. Session-only: nothing is
+                    // persisted, so every sheet open starts fully collapsed.
+                    item(key = "link_groups_row") {
+                        LazyRow(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp, bottom = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(
+                                items = displayGroups,
+                                key = { group -> "link_chip_${group.addonId}" }
+                            ) { group ->
+                                val isExpanded = group.addonId in expandedAddonIds
+                                Row(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .background(DownloadTokens.pressedSurface)
-                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(
+                                            if (isExpanded) Color.White
+                                            else DownloadTokens.pressedSurface
+                                        )
+                                        .pressable(
+                                            onClickLabel = if (isExpanded) "Collapse ${group.addonName}" else "Expand ${group.addonName}",
+                                            onClick = {
+                                                expandedAddonIds = if (isExpanded) {
+                                                    expandedAddonIds - group.addonId
+                                                } else {
+                                                    expandedAddonIds + group.addonId
+                                                }
+                                            }
+                                        )
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Row(
+                                    Text(
+                                        text = "${group.addonName} · ${group.streams.size}",
+                                        style = TextStyle(
+                                            fontFamily = AppFontFamily,
+                                            fontWeight = FontWeight.Medium,
+                                            fontSize = 13.sp,
+                                            color = if (isExpanded) Color(0xFF0B0B0F)
+                                            else DownloadTokens.textPrimary
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(
+                                        imageVector = if (isExpanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
+                                        contentDescription = if (isExpanded) "Collapse ${group.addonName}" else "Expand ${group.addonName}",
+                                        tint = if (isExpanded) Color(0xFF0B0B0F)
+                                        else DownloadTokens.textMuted,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Expanded addons show their links full-width below the chip row.
+                    displayGroups.forEach { group ->
+                        if (group.addonId in expandedAddonIds) {
+                            item(key = "link_group_section_${group.addonId}") {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Text(
+                                        text = "${group.addonName} · ${group.streams.size}",
+                                        style = TextStyle(
+                                            fontFamily = AppFontFamily,
+                                            fontWeight = FontWeight.Medium,
+                                            fontSize = 13.sp,
+                                            color = DownloadTokens.textPrimary
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .pressable(
-                                                onClickLabel = if (isCollapsed) "Expand ${group.addonName}" else "Collapse ${group.addonName}",
-                                                onClick = {
-                                                    collapsedAddonIds = if (isCollapsed) {
-                                                        collapsedAddonIds - group.addonId
-                                                    } else {
-                                                        collapsedAddonIds + group.addonId
-                                                    }
-                                                }
-                                            )
-                                            .padding(vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "${group.addonName} · ${group.streams.size}",
-                                            style = TextStyle(
-                                                fontFamily = AppFontFamily,
-                                                fontWeight = FontWeight.Medium,
-                                                fontSize = 13.sp,
-                                                color = DownloadTokens.textPrimary
-                                            ),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f)
+                                            .padding(top = 12.dp, bottom = 2.dp)
+                                    )
+                                    group.streams.forEachIndexed { index, stream ->
+                                        LinkStreamRow(
+                                            stream = stream,
+                                            onClick = { onStreamSelected(stream) },
+                                            onLongClick = onLongClick?.let { { it(stream) } }
                                         )
-                                        Icon(
-                                            imageVector = if (isCollapsed) Icons.Outlined.KeyboardArrowDown else Icons.Outlined.KeyboardArrowUp,
-                                            contentDescription = if (isCollapsed) "Expand ${group.addonName}" else "Collapse ${group.addonName}",
-                                            tint = DownloadTokens.textMuted,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                    if (!isCollapsed) {
-                                        group.streams.forEachIndexed { index, stream ->
-                                            LinkStreamRow(
-                                                stream = stream,
-                                                onClick = { onStreamSelected(stream) },
-                                                onLongClick = onLongClick?.let { { it(stream) } }
+                                        if (index < group.streams.lastIndex) {
+                                            HorizontalDivider(
+                                                thickness = DownloadTokens.hairlineHeight,
+                                                color = DownloadTokens.hairline
                                             )
-                                            if (index < group.streams.lastIndex) {
-                                                HorizontalDivider(
-                                                    thickness = DownloadTokens.hairlineHeight,
-                                                    color = DownloadTokens.hairline
-                                                )
-                                            }
                                         }
                                     }
+                                    Spacer(modifier = Modifier.height(8.dp))
                                 }
-                                Spacer(modifier = Modifier.height(10.dp))
                             }
                         }
                     }
