@@ -9,8 +9,8 @@ class ReleaseChangelogParserTest {
     @Test
     fun testExtractsPhotosAndFormatsHeadlines() {
         val markdown = """
-            ![Hero Banner](https://github.com/TheARCreactorGUY/Euthopiar/assets/hero.png)
-            <img src="https://github.com/TheARCreactorGUY/Euthopiar/assets/preview.jpg" />
+            ![Hero Banner](https://github.com/a-kay-raz/Netvio/assets/hero.png)
+            <img src="https://github.com/a-kay-raz/Netvio/assets/preview.jpg" />
 
             ## Top Features
             * **Player Quality HUD:** Live playback resolution now smoothly pops up when player controls fade away.
@@ -26,8 +26,8 @@ class ReleaseChangelogParserTest {
 
         // 1. Photos extracted
         assertEquals(2, result.photos.size)
-        assertEquals("https://github.com/TheARCreactorGUY/Euthopiar/assets/hero.png", result.photos[0])
-        assertEquals("https://github.com/TheARCreactorGUY/Euthopiar/assets/preview.jpg", result.photos[1])
+        assertEquals("https://github.com/a-kay-raz/Netvio/assets/hero.png", result.photos[0])
+        assertEquals("https://github.com/a-kay-raz/Netvio/assets/preview.jpg", result.photos[1])
 
         // 2. Nodes structured
         val nodes = result.nodes

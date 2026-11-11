@@ -38,7 +38,7 @@ test_eups_repo/
 *.log
 scrapers_dump.json
 androidx/
-euthopiar_icons/
+netvio_icons/
 custom_icons/
 svg icons user inspection/
 build_server/
@@ -51,4 +51,4 @@ Refrence Nuviou/**
 Refrence Nuviou/NuvioMobile/
 Refrence Nuviou/NuvioMobile
 AI_RULES.md
-.agents/skills/euthopiar-pipeline/
+.agents/skills/netvio-pipeline/
