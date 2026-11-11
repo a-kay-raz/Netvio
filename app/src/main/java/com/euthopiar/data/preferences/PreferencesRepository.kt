@@ -98,7 +98,6 @@ class PreferencesRepository private constructor(private val context: Context) {
         val EXTRA_CONTENT_ENABLED = booleanPreferencesKey("extra_content_enabled")
         val CARD_SCALE_MODE = stringPreferencesKey("card_scale_mode")
         val NAVBAR_STYLE = stringPreferencesKey("navbar_style")
-        val FIRST_RUN_COMPLETED = booleanPreferencesKey("first_run_completed")
         val RECENT_SEARCHES = stringPreferencesKey("recent_searches_csv")
         val DOH_PROVIDER = stringPreferencesKey("doh_provider")
         val FAVORITE_MEDIA_IDS = stringPreferencesKey("favorite_media_ids")
@@ -144,10 +143,6 @@ class PreferencesRepository private constructor(private val context: Context) {
         val AMOLED_MODE = booleanPreferencesKey("amoled_mode")
         val SMART_FAILOVER_ENABLED = booleanPreferencesKey("smart_failover_enabled")
         val AUDIO_PASSTHROUGH_ENABLED = booleanPreferencesKey("audio_passthrough_enabled")
-
-        // 1.4 App Version Preferences
-        val LAST_APP_VERSION = stringPreferencesKey("last_app_version")
-        val WALKTHROUGH_COMPLETED_VERSION = stringPreferencesKey("walkthrough_completed_version")
 
         // 1.6 Supabase Cloud Sync
         val SUPABASE_ACCESS_TOKEN = stringPreferencesKey("supabase_access_token")
@@ -816,6 +811,32 @@ class PreferencesRepository private constructor(private val context: Context) {
         com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
     }
 
+    /**
+     * Deletes the saved Catalog Manager preferences (order, visibility,
+     * rename) for one Stremio addon's catalogs, identified by the addon's
+     * manifest id. Stremio catalog keys are
+     * "<manifestId>:<type>:<catalogId>", so the "<manifestId>:" prefix
+     * matches exactly that addon's catalogs and nothing else.
+     *
+     * Call this ONLY at a real removal point (addon removed by the user,
+     * removed by a cloud-sync deletion, or dropped by a backup restore).
+     * A failed manifest refresh never removes the addon from the installed
+     * list, so it can never trigger this cleanup — that is what keeps the
+     * 1ba2837 fix intact: transient failures keep the user's preferences.
+     * If the manifest id is unknown (manifest never loaded), nothing is
+     * deleted; keeping possibly-stale preferences is safer than deleting
+     * preferences for an addon that may still be installed.
+     */
+    suspend fun removeCatalogPreferencesForManifestId(manifestId: String) {
+        if (manifestId.isBlank()) return
+        val prefix = "$manifestId:"
+        val current = getCatalogPreferences()
+        val pruned = current.filterKeys { !it.startsWith(prefix) }
+        if (pruned.keys != current.keys) {
+            saveCatalogPreferences(pruned)
+        }
+    }
+
     val reduceMotion: Flow<Boolean> = context.preferencesDataStore.data
         .catch { exception ->
             if (exception is IOException) emit(emptyPreferences()) else throw exception
@@ -828,21 +849,6 @@ class PreferencesRepository private constructor(private val context: Context) {
     suspend fun setReduceMotion(enabled: Boolean) {
         context.preferencesDataStore.edit { preferences ->
             preferences[PreferencesKeys.REDUCE_MOTION] = enabled
-        }
-    }
-
-    val firstRunCompleted: Flow<Boolean> = context.preferencesDataStore.data
-        .catch { exception ->
-            if (exception is IOException) emit(emptyPreferences()) else throw exception
-        }
-        .map { preferences ->
-            preferences[PreferencesKeys.FIRST_RUN_COMPLETED] ?: false
-        }
-        .distinctUntilChanged()
-
-    suspend fun setFirstRunCompleted(completed: Boolean) {
-        context.preferencesDataStore.edit { preferences ->
-            preferences[PreferencesKeys.FIRST_RUN_COMPLETED] = completed
         }
     }
 
@@ -989,39 +995,6 @@ class PreferencesRepository private constructor(private val context: Context) {
     suspend fun setAudioPassthroughEnabled(enabled: Boolean) {
         context.preferencesDataStore.edit { preferences ->
             preferences[PreferencesKeys.AUDIO_PASSTHROUGH_ENABLED] = enabled
-        }
-    }
-
-    // Last saved app version. AppNavHost reads this to tell a fresh install
-    // (show the walkthrough) from an existing install (skip it); HomeScreen
-    // stamps it once Home content has loaded.
-    val lastAppVersion: Flow<String> = context.preferencesDataStore.data
-        .catch { exception ->
-            if (exception is IOException) emit(emptyPreferences()) else throw exception
-        }
-        .map { preferences ->
-            preferences[PreferencesKeys.LAST_APP_VERSION] ?: ""
-        }
-        .distinctUntilChanged()
-
-    suspend fun setLastAppVersion(version: String) {
-        context.preferencesDataStore.edit { preferences ->
-            preferences[PreferencesKeys.LAST_APP_VERSION] = version
-        }
-    }
-
-    val walkthroughCompletedVersion: Flow<String> = context.preferencesDataStore.data
-        .catch { exception ->
-            if (exception is IOException) emit(emptyPreferences()) else throw exception
-        }
-        .map { preferences ->
-            preferences[PreferencesKeys.WALKTHROUGH_COMPLETED_VERSION] ?: ""
-        }
-        .distinctUntilChanged()
-
-    suspend fun setWalkthroughCompletedVersion(version: String) {
-        context.preferencesDataStore.edit { preferences ->
-            preferences[PreferencesKeys.WALKTHROUGH_COMPLETED_VERSION] = version
         }
     }
 

@@ -430,20 +430,9 @@ fun PluginsSettingsPage(
                         ) {
                             // Section: ADD REPOSITORY
                             item {
-                                val repoCardDensity = LocalDensity.current
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .onGloballyPositioned { coordinates ->
-                                            val bounds = coordinates.boundsInRoot()
-                                            val radiusPx = with(repoCardDensity) { 20.dp.toPx() }
-                                            com.euthopiar.ui.walkthrough.WalkthroughCoordinator.instance.reportTarget(
-                                                step = com.euthopiar.ui.walkthrough.WalkthroughStep.STEP_3_INSTALL_REPO,
-                                                bounds = bounds,
-                                                cornerRadiusPx = radiusPx,
-                                                isInteractive = true
-                                            )
-                                        }
                                         .clip(RoundedCornerShape(20.dp))
                                         .background(Color.White.copy(alpha = 0.04f))
                                         .border(0.5.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(20.dp))
@@ -494,7 +483,6 @@ fun PluginsSettingsPage(
                                                     viewModel.addRepository(url) { success, msg ->
                                                         statusDialogState = if (success) {
                                                             repoUrlInput = ""
-                                                            com.euthopiar.ui.walkthrough.WalkthroughCoordinator.instance.complete(context)
                                                             StatusDialogState.Success(msg ?: url)
                                                         } else {
                                                             StatusDialogState.Error(
@@ -537,7 +525,6 @@ fun PluginsSettingsPage(
                                                 viewModel.syncCommunityRepository { success, msg ->
                                                     isSyncingOfficial = false
                                                     statusDialogState = if (success) {
-                                                        com.euthopiar.ui.walkthrough.WalkthroughCoordinator.instance.complete(context)
                                                         StatusDialogState.Success(msg ?: "Official repositories installed")
                                                     } else {
                                                         StatusDialogState.Error(msg ?: "Failed to sync repositories")

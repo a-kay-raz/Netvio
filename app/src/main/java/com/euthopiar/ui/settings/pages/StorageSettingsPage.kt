@@ -624,7 +624,7 @@ fun StorageSettingsPage(
             is BackupUiState.RestoreSuccess -> {
                 EuthopiarGlassDialog(
                     title = "Backup restored",
-                    message = "Configuration has been restored successfully. Restart Euthopiar now to apply all changes.",
+                    message = "Configuration has been restored successfully. Restart Netvio now to apply all changes.",
                     confirmText = "Restart now",
                     dismissText = "Later",
                     icon = Icons.Outlined.CheckCircleOutline,

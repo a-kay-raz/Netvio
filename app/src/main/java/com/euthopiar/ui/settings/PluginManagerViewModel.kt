@@ -401,7 +401,20 @@ class PluginManagerViewModel(
 
     fun removeAddon(manifestUrl: String) {
         viewModelScope.launch {
+            // Capture the addon's manifest id BEFORE removing it: Stremio
+            // catalog keys are "<manifestId>:<type>:<catalogId>", so the id
+            // is what maps the addon's catalogs to their saved preferences.
+            // The installed list is the authority here — a failed manifest
+            // refresh never removes the addon from it, so this cleanup can
+            // only fire on a real removal, never on a transient failure.
+            val manifestId = addonRepository.uiState.value.addons.firstOrNull {
+                it.manifestUrl == manifestUrl ||
+                    it.manifestUrl == AddonRepository.normalizeAddonUrl(manifestUrl)
+            }?.manifest?.id
             addonRepository.removeAddon(manifestUrl)
+            if (!manifestId.isNullOrBlank()) {
+                preferencesRepository.removeCatalogPreferencesForManifestId(manifestId)
+            }
             preferencesRepository.addPendingDeletedAddonUrl(manifestUrl)
             SupabaseSyncManager.getInstance(getApplication()).scheduleSync()
         }

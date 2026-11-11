@@ -22,6 +22,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import okio.Path.Companion.toOkioPath
 
 class EuthopiarApp : Application(), SingletonImageLoader.Factory {
@@ -35,7 +36,6 @@ class EuthopiarApp : Application(), SingletonImageLoader.Factory {
 
         // Initialize 50MB HTTP disk cache and connection pool
         DohDns.initHttpCache(cacheDir)
-        com.euthopiar.ui.player.sequential.SequentialStreamManager.cleanOrphanedCache(this)
 
         // Synchronously initialize JsPluginStorage, AddonRepository, and P2P engine instances
         com.euthopiar.core.js.JsPluginStorage.getInstance(this)
@@ -53,6 +53,8 @@ class EuthopiarApp : Application(), SingletonImageLoader.Factory {
 
         // Initialize plugins, prefetch DNS, and restore default selected provider across restarts
         CoroutineScope(Dispatchers.IO).launch {
+            // Disk scan, so it runs off the main thread instead of in onCreate.
+            com.euthopiar.ui.player.sequential.SequentialStreamManager.cleanOrphanedCache(this@EuthopiarApp)
             try {
                 com.euthopiar.core.js.JsPluginStorage.getInstance(this@EuthopiarApp).initialize()
                 com.euthopiar.core.addons.AddonRepository.getInstance(this@EuthopiarApp).initialize()
@@ -126,6 +128,9 @@ class EuthopiarApp : Application(), SingletonImageLoader.Factory {
             } catch (_: Exception) {}
 
             launch(Dispatchers.IO) {
+                // Non-critical: wait for the first frame so the plugin
+                // auto-update check (network) cannot slow Home's first load.
+                this@EuthopiarApp.awaitFirstFrame()
                 try {
                     val updated = PluginRepositoryService.getInstance(this@EuthopiarApp)
                         .checkAndAutoUpdatePlugins(installNewFromRepos = false)
@@ -138,12 +143,29 @@ class EuthopiarApp : Application(), SingletonImageLoader.Factory {
             }
 
             launch(Dispatchers.IO) {
+                // Non-critical: poster repair (database work) also waits for
+                // the first frame.
+                this@EuthopiarApp.awaitFirstFrame()
                 try {
                     com.euthopiar.data.sync.MediaSyncManager.getInstance(this@EuthopiarApp)
                         .repairMissingLocalPosters()
                 } catch (_: Exception) {}
             }
         }
+    }
+
+    /**
+     * Suspends until the splash ignition has finished (first frame shown),
+     * or 15s at most so this work still runs if ignition never reports
+     * finished. On a warm start ignition is already finished and this
+     * returns immediately.
+     */
+    private suspend fun awaitFirstFrame() {
+        try {
+            withTimeoutOrNull(15_000L) {
+                com.euthopiar.ui.splash.AppLaunchCoordinator.isIgnitionActive.first { !it }
+            }
+        } catch (_: Exception) {}
     }
 
     private val imageHttpClient by lazy {

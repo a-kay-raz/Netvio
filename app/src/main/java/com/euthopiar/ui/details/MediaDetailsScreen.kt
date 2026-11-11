@@ -567,7 +567,7 @@ fun MediaDetailsScreen(
                                             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                                 setType("text/plain")
                                                 putExtra(Intent.EXTRA_SUBJECT, detail.title)
-                                                putExtra(Intent.EXTRA_TEXT, "Watch ${detail.title}$shareYear on Euthopiar")
+                                                putExtra(Intent.EXTRA_TEXT, "Watch ${detail.title}$shareYear on Netvio")
                                             }
                                             context.startActivity(Intent.createChooser(shareIntent, "Share ${detail.title}"))
                                         },
@@ -904,7 +904,7 @@ fun MediaDetailsScreen(
                                                 val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                                     setType("text/plain")
                                                     putExtra(Intent.EXTRA_SUBJECT, detail.title)
-                                                    putExtra(Intent.EXTRA_TEXT, "Watch ${detail.title}$shareYear on Euthopiar")
+                                                    putExtra(Intent.EXTRA_TEXT, "Watch ${detail.title}$shareYear on Netvio")
                                                 }
                                                 context.startActivity(Intent.createChooser(shareIntent, "Share ${detail.title}"))
                                             },

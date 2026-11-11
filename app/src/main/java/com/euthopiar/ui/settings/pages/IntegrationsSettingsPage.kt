@@ -487,7 +487,7 @@ fun IntegrationsSettingsPage(
 
                 OpenSettingsToggleRow(
                     title = "Plan to Watch",
-                    subtitle = "Two-way sync between your Euthopiar watchlist and Simkl",
+                    subtitle = "Two-way sync between your Netvio watchlist and Simkl",
                     checked = simklSyncWatchlist,
                     onCheckedChange = { viewModel.setSimklSyncWatchlist(it) },
                     hazeState = hazeState

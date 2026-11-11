@@ -47,7 +47,6 @@ import com.euthopiar.ui.theme.rememberWindowDimensions
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,8 +84,6 @@ import com.euthopiar.ui.longpress.UserReaction
 import com.euthopiar.ui.longpress.toSheetItem
 import com.euthopiar.ui.components.TopHeaderBar
 import com.euthopiar.ui.components.TopTenRow
-import com.euthopiar.data.preferences.PreferencesRepository
-import kotlinx.coroutines.flow.first
 import com.euthopiar.ui.navigation.ObserveScrollForNavbar
 import com.euthopiar.ui.theme.Accent
 import com.euthopiar.ui.theme.LocalAmoledMode
@@ -127,8 +124,6 @@ fun HomeScreen(
     var addToPlaylistMedia by remember { mutableStateOf<MediaItem?>(null) }
     var watchlistSheetMedia by remember { mutableStateOf<MediaItem?>(null) }
 
-    val preferencesRepository = remember(context) { PreferencesRepository.getInstance(context) }
-
     // Notify AppLaunchCoordinator when Home catalog data is ready for dynamic early release
     LaunchedEffect(uiState) {
         if (uiState is HomeUiState.Success) {
@@ -138,23 +133,6 @@ fun HomeScreen(
         }
     }
 
-    // Keep the stored app version up to date once Home content has loaded.
-    // AppNavHost reads lastAppVersion to tell a fresh install (show the
-    // walkthrough) from an existing install (skip it).
-    var versionStampedThisSession by rememberSaveable { mutableStateOf(false) }
-
-    LaunchedEffect(uiState) {
-        if (versionStampedThisSession) return@LaunchedEffect
-        // Must wait until home page gets loaded with content for the first time
-        if (uiState !is HomeUiState.Success) return@LaunchedEffect
-
-        val currentVersion = context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.0"
-        val lastSavedVersion = preferencesRepository.lastAppVersion.first()
-        if (lastSavedVersion != currentVersion) {
-            preferencesRepository.setLastAppVersion(currentVersion)
-        }
-        versionStampedThisSession = true
-    }
     val lazyListState = rememberLazyListState()
     val navbarVisible = com.euthopiar.ui.navigation.LocalNavbarVisible.current
     val shouldHideHomeNavbar =
@@ -727,7 +705,7 @@ fun HomeScreen(
                 val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                     type = "text/plain"
                     putExtra(android.content.Intent.EXTRA_SUBJECT, item.title)
-                    putExtra(android.content.Intent.EXTRA_TEXT, "Watch ${item.title} on Euthopiar")
+                    putExtra(android.content.Intent.EXTRA_TEXT, "Watch ${item.title} on Netvio")
                 }
                 context.startActivity(android.content.Intent.createChooser(shareIntent, "Share ${item.title}"))
             },

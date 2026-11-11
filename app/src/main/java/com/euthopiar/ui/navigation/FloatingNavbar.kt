@@ -57,8 +57,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
@@ -334,33 +332,10 @@ private fun NavbarRow(
                 val tabInnerRadius = (tabOuterRadius - 4.dp).coerceAtLeast(0.dp)
                 val tabFocusShape = RoundedCornerShape(tabInnerRadius)
 
-                val isProfileTab = tab == NavTab.PROFILE
-                val localDensity = androidx.compose.ui.platform.LocalDensity.current
-                val profileWalkthroughModifier = if (isProfileTab) {
-                    Modifier.onGloballyPositioned { coordinates ->
-                        val cellBounds = coordinates.boundsInRoot()
-                        val insetPx = with(localDensity) { 4.dp.toPx() }
-                        val pillBounds = androidx.compose.ui.geometry.Rect(
-                            left = cellBounds.left + insetPx,
-                            top = cellBounds.top + insetPx,
-                            right = cellBounds.right - insetPx,
-                            bottom = cellBounds.bottom - insetPx
-                        )
-                        val cornerRadiusPx = with(localDensity) { tabInnerRadius.toPx() }
-                        com.euthopiar.ui.walkthrough.WalkthroughCoordinator.instance.reportTarget(
-                            step = com.euthopiar.ui.walkthrough.WalkthroughStep.STEP_1_PROFILE,
-                            bounds = pillBounds,
-                            cornerRadiusPx = cornerRadiusPx,
-                            isInteractive = false
-                        )
-                    }
-                } else Modifier
-
                 Column(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .then(profileWalkthroughModifier)
                         .graphicsLayer {
                             scaleX = scale.value
                             scaleY = scale.value
@@ -377,11 +352,6 @@ private fun NavbarRow(
                                     try {
                                         haptic.performHapticFeedback(HapticFeedbackType.Confirm)
                                     } catch (_: Exception) {}
-                                    if (tab == NavTab.PROFILE) {
-                                        com.euthopiar.ui.walkthrough.WalkthroughCoordinator.instance.onTargetTapped(
-                                            com.euthopiar.ui.walkthrough.WalkthroughStep.STEP_1_PROFILE
-                                        )
-                                    }
                                     onTabSelected(tab)
                                 }
                             }
@@ -652,8 +622,6 @@ fun AdaptiveNavigationRail(
 
             Spacer(modifier = Modifier.height(Dimens.spacing16))
 
-            val railDensity = androidx.compose.ui.platform.LocalDensity.current
-
             NavTab.entries.forEach { tab ->
                 val isSelected = normalizedRoute == tab.route
 
@@ -672,31 +640,12 @@ fun AdaptiveNavigationRail(
                             this.role = Role.Tab
                             this.selected = isSelected
                         }
-                        .then(
-                            if (tab == NavTab.PROFILE || tab.route == NavTab.PROFILE.route) {
-                                Modifier.onGloballyPositioned { coordinates ->
-                                    val bounds = coordinates.boundsInRoot()
-                                    val radiusPx = with(railDensity) { 24.dp.toPx() }
-                                    com.euthopiar.ui.walkthrough.WalkthroughCoordinator.instance.reportTarget(
-                                        step = com.euthopiar.ui.walkthrough.WalkthroughStep.STEP_1_PROFILE,
-                                        bounds = bounds,
-                                        cornerRadiusPx = radiusPx,
-                                        isInteractive = false
-                                    )
-                                }
-                            } else Modifier
-                        )
                         .pressable(
                             role = Role.Tab,
                             onClick = {
                                 if (isSelected) {
                                     onTabReselected?.invoke(tab)
                                 } else {
-                                    if (tab == NavTab.PROFILE || tab.route == NavTab.PROFILE.route) {
-                                        com.euthopiar.ui.walkthrough.WalkthroughCoordinator.instance.onTargetTapped(
-                                            com.euthopiar.ui.walkthrough.WalkthroughStep.STEP_1_PROFILE
-                                        )
-                                    }
                                     onTabSelected(tab)
                                 }
                             }

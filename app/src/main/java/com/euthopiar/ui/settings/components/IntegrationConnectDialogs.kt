@@ -299,7 +299,7 @@ fun TraktConnectDialog(
 
                     // Explanatory Body Copy
                     Text(
-                        text = "Authorize Euthopiar with Trakt to automatically sync your watched history, scrobble media, and keep watchlists aligned across all your devices.",
+                        text = "Authorize Netvio with Trakt to automatically sync your watched history, scrobble media, and keep watchlists aligned across all your devices.",
                         style = EuthopiarGlassTokens.BodyText
                     )
 
@@ -979,7 +979,7 @@ fun SimklConnectDialog(
                                     )
                                     Spacer(modifier = Modifier.height(2.dp))
                                     Text(
-                                        text = "Approve access on simkl.com to return to Euthopiar",
+                                        text = "Approve access on simkl.com to return to Netvio",
                                         style = TextStyle(
                                             fontFamily = AppFontFamily,
                                             fontWeight = FontWeight.Normal,

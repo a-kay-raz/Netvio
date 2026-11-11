@@ -1594,7 +1594,7 @@ class MediaSyncManager private constructor(
         try {
             val bodyJson = JSONObject().apply {
                 put("name", name)
-                put("description", "Synced from Euthopiar")
+                put("description", "Synced from Netvio")
                 put("privacy", "private")
                 put("display_numbers", false)
                 put("allow_comments", false)

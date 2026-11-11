@@ -798,7 +798,21 @@ class SupabaseSyncManager private constructor(
 
                     if (item.isDeleted) {
                         if (item.addonType == "stremio") {
+                            // Remote deletion is a real removal, so the
+                            // addon's saved catalog preferences go with it.
+                            // The manifest id is captured before removing,
+                            // while the addon is still in the installed list;
+                            // a failed manifest refresh never removes it from
+                            // that list, so this cannot fire on a transient
+                            // failure.
+                            val manifestId = addonRepository.uiState.value.addons.firstOrNull {
+                                it.manifestUrl == url ||
+                                    it.manifestUrl == com.euthopiar.core.addons.AddonRepository.normalizeAddonUrl(url)
+                            }?.manifest?.id
                             addonRepository.removeAddon(url)
+                            if (!manifestId.isNullOrBlank()) {
+                                preferencesRepository.removeCatalogPreferencesForManifestId(manifestId)
+                            }
                         } else if (item.addonType == "js_repo") {
                             pluginService.removeRepository(url)
                         }

@@ -1,4 +1,4 @@
-name: Euthopiar Production Release
+name: Netvio Production Release
 
 on:
   push:
@@ -43,7 +43,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Euthopiar ${{ github.ref_name }}
+          name: Netvio ${{ github.ref_name }}
           draft: false
           prerelease: false
           generate_release_notes: true

@@ -70,7 +70,7 @@ import dev.chrisbanes.haze.hazeEffect
 /**
  * Redesigned Top Header Bar matching Part 2: Top Header (over the hero).
  *
- * - Left: "EUTHOPIAR" wordmark at 15sp medium with wide 0.2em letter spacing.
+ * - Left: "NETVIO" wordmark at 15sp medium with wide 0.2em letter spacing.
  * - Right: Profile avatar in a 38dp round glass ring with 0.5dp hairline border and 48dp touch target.
  * - Top scrim: Opacity fade protecting header legibility over bright posters.
  * - Scroll transition: Fades from transparent to frosted glass over scroll with 0.5dp bottom hairline.
@@ -189,7 +189,7 @@ fun TopHeaderBar(
                 // App Wordmark: 15 sp, medium, wide letter spacing (0.2 em), white
                 // Coordinated with AppIgnitionSequence to eliminate dual-text ghosting during landing
                 Text(
-                    text = "EUTHOPIAR",
+                    text = "NETVIO",
                     style = AppTypography.titleMedium.copy(
                         fontFamily = AppFontFamily,
                         fontWeight = FontWeight.Medium,

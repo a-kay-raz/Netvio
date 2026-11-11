@@ -12,10 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.graphicsLayer
-import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -41,8 +38,6 @@ import com.euthopiar.ui.details.MediaDetailsScreen
 import com.euthopiar.ui.home.HomeScreen
 import com.euthopiar.ui.player.PlayerScreen
 import com.euthopiar.ui.search.SearchScreen
-import com.euthopiar.ui.walkthrough.SpotlightWalkthroughOverlay
-import com.euthopiar.ui.walkthrough.WalkthroughCoordinator
 import com.euthopiar.ui.components.AppSnackbarController
 import com.euthopiar.ui.components.AppSnackbarHost
 import com.euthopiar.ui.components.AppSnackbarHostState
@@ -262,7 +257,6 @@ fun AppNavHost(
     val preferencesRepository = remember { com.euthopiar.data.preferences.PreferencesRepository.getInstance(context) }
     val cardScaleMode by preferencesRepository.cardScaleMode.collectAsState(initial = com.euthopiar.data.preferences.CardScaleMode.FLAGSHIP)
     val navbarStyle by preferencesRepository.navbarStyle.collectAsState(initial = com.euthopiar.data.preferences.NavbarStyle.FLOATING)
-    val firstRunCompleted by preferencesRepository.firstRunCompleted.collectAsState(initial = null)
     val isAmoledMode by preferencesRepository.amoledMode.collectAsState(initial = true)
 
     val windowDimensions = com.euthopiar.ui.theme.rememberWindowDimensions()
@@ -290,55 +284,18 @@ fun AppNavHost(
         val isCurrentProfileUnlocked = !activeProfile.isPinLocked || unlockedProfileIds.contains(activeProfile.id)
         var showColdStartSwitcher by remember { mutableStateOf(false) }
 
-        LaunchedEffect(firstRunCompleted, isCurrentProfileUnlocked) {
-            when {
-                firstRunCompleted == false -> com.euthopiar.ui.splash.AppLaunchCoordinator.notifyDestinationMode(
-                    com.euthopiar.ui.splash.LaunchDestinationMode.ONBOARDING
-                )
-                firstRunCompleted == true && !isCurrentProfileUnlocked -> com.euthopiar.ui.splash.AppLaunchCoordinator.notifyDestinationMode(
-                    com.euthopiar.ui.splash.LaunchDestinationMode.PIN_LOCK
-                )
-                firstRunCompleted == true && isCurrentProfileUnlocked -> com.euthopiar.ui.splash.AppLaunchCoordinator.notifyDestinationMode(
+        // No setup guide: every launch goes straight to Home (or the PIN
+        // lock for a locked profile). ProfileManager already creates the
+        // default profiles on a fresh install, so Home always has a usable
+        // active profile without any onboarding step.
+        LaunchedEffect(isCurrentProfileUnlocked) {
+            com.euthopiar.ui.splash.AppLaunchCoordinator.notifyDestinationMode(
+                if (isCurrentProfileUnlocked) {
                     com.euthopiar.ui.splash.LaunchDestinationMode.HOME
-                )
-            }
-        }
-
-        if (firstRunCompleted == null) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.background)
+                } else {
+                    com.euthopiar.ui.splash.LaunchDestinationMode.PIN_LOCK
+                }
             )
-            return@CompositionLocalProvider
-        }
-
-        var isOnboardingExiting by remember { mutableStateOf(false) }
-        val onboardingAlpha by animateFloatAsState(
-            targetValue = if (isOnboardingExiting) 0f else 1f,
-            animationSpec = tween<Float>(durationMillis = 300),
-            label = "onboardingExitAlpha"
-        )
-
-        if (firstRunCompleted == false) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        alpha = onboardingAlpha; val s = 1f + (1f - onboardingAlpha) * 0.02f; scaleX = s; scaleY = s
-                    }
-            ) {
-                com.euthopiar.ui.onboarding.OnboardingScreen(
-                    onComplete = {
-                        coroutineScope.launch {
-                            isOnboardingExiting = true
-                            delay(300L)
-                            preferencesRepository.setFirstRunCompleted(true)
-                        }
-                    }
-                )
-            }
-            return@CompositionLocalProvider
         }
 
         if (!isCurrentProfileUnlocked) {
@@ -374,45 +331,6 @@ fun AppNavHost(
 
         val showBottomNav = windowDimensions.isPhone && !isFullscreen
         val showNavRail = !windowDimensions.isPhone && !isFullscreen
-
-        val currentAppVersion = remember(context) {
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.0"
-        }
-        val lastSavedVersion by preferencesRepository.lastAppVersion.collectAsState(initial = null)
-        val walkthroughCompletedVersion by preferencesRepository.walkthroughCompletedVersion.collectAsState(initial = null)
-
-        DisposableEffect(navController) {
-            WalkthroughCoordinator.instance.navigationHandler = { route ->
-                if (route == "home" || route == NavTab.HOME.route) {
-                    navController.popBackStack(NavTab.HOME.route, inclusive = false)
-                } else {
-                    navController.navigateSafely(route)
-                }
-            }
-            onDispose {
-                WalkthroughCoordinator.instance.navigationHandler = null
-            }
-        }
-
-        LaunchedEffect(firstRunCompleted, lastSavedVersion, walkthroughCompletedVersion, activeProfile.isKids) {
-            if (firstRunCompleted != true) return@LaunchedEffect
-            if (activeProfile.isKids) return@LaunchedEffect
-            val lastVer = lastSavedVersion ?: return@LaunchedEffect
-            val completedVer = walkthroughCompletedVersion ?: return@LaunchedEffect
-
-            if (completedVer.isNotBlank()) return@LaunchedEffect
-
-            val coordinator = WalkthroughCoordinator.instance
-            if (!coordinator.isActive) {
-                val isFreshInstall = lastVer.isBlank()
-                if (isFreshInstall) {
-                    coordinator.start(isFreshInstall = true)
-                } else {
-                    // Existing installation updated to a newer version: do not show the walkthrough
-                    preferencesRepository.setWalkthroughCompletedVersion(currentAppVersion)
-                }
-            }
-        }
 
         Scaffold(
             modifier = Modifier
@@ -1343,11 +1261,6 @@ fun AppNavHost(
             AppSnackbarHost(
                 hostState = snackbarHostState,
                 bottomPadding = snackbarBottomPadding
-            )
-
-            SpotlightWalkthroughOverlay(
-                coordinator = WalkthroughCoordinator.instance,
-                hazeState = navbarHazeState
             )
         }
     }

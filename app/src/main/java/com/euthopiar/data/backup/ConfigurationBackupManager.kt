@@ -246,7 +246,7 @@ class ConfigurationBackupManager(private val context: Context) {
 
             // 10. Construct Root Backup Envelope
             val root = JSONObject().apply {
-                put("app", "Euthopiar")
+                put("app", "Netvio")
                 put("version", BACKUP_VERSION)
                 put("exportedAt", System.currentTimeMillis())
                 put("appVersion", appVersion)
@@ -339,10 +339,12 @@ class ConfigurationBackupManager(private val context: Context) {
                 )
             }
 
-            if (root.optString("app") != "Euthopiar") {
+            // Backups written before the rename carry "Euthopiar"; accept
+            // both so old backups still restore.
+            if (root.optString("app") != "Netvio" && root.optString("app") != "Euthopiar") {
                 return@withContext BackupInspectionResult(
                     isValid = false,
-                    errorMessage = "Selected file is not a valid Euthopiar configuration backup"
+                    errorMessage = "Selected file is not a valid Netvio configuration backup"
                 )
             }
 
@@ -487,14 +489,6 @@ class ConfigurationBackupManager(private val context: Context) {
                 }
             }
 
-            // 2. Synchronize SharedPreferences fallback for first_run_completed
-            try {
-                context.getSharedPreferences("euthopiar_settings", Context.MODE_PRIVATE)
-                    .edit()
-                    .putBoolean("first_run_completed", true)
-                    .apply()
-            } catch (_: Exception) {}
-
             // 3. Restore User Profiles (including passwords/PINs and pinHash)
             if (profilesArr != null && profilesArr.length() > 0) {
                 try {
@@ -569,7 +563,19 @@ class ConfigurationBackupManager(private val context: Context) {
             if (addonsArr != null && addonsArr.length() > 0) {
                 try {
                     val addonsList = json.decodeFromString<List<ManagedAddon>>(addonsArr.toString())
-                    AddonRepository.getInstance(context).restoreAddons(addonsList)
+                    val addonRepository = AddonRepository.getInstance(context)
+                    // A restore replaces the whole addon list, so addons in
+                    // the current list but missing from the backup are
+                    // removed by it — their saved catalog preferences go
+                    // with them, exactly like a manual removal.
+                    val removedManifestIds = addonRepository.uiState.value.addons
+                        .mapNotNull { it.manifest?.id }
+                        .toSet() - addonsList.mapNotNull { it.manifest?.id }.toSet()
+                    addonRepository.restoreAddons(addonsList)
+                    val prefsRepo = com.euthopiar.data.preferences.PreferencesRepository.getInstance(context)
+                    removedManifestIds.forEach { manifestId ->
+                        prefsRepo.removeCatalogPreferencesForManifestId(manifestId)
+                    }
                 } catch (e: Exception) {
                     android.util.Log.e("ConfigBackupManager", "Failed to restore addons: ${e.message}", e)
                 }

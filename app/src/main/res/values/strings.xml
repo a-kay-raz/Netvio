@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Euthopiar</string>
+    <string name="app_name">Netvio</string>
     <string name="download_channel_name">Downloads</string>
     <string name="download_channel_description">Media download progress and status</string>
 

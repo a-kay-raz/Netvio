@@ -21,8 +21,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import com.euthopiar.core.sync.simkl.SimklClient
 import com.euthopiar.data.preferences.PreferencesRepository
 import androidx.compose.foundation.background
@@ -132,8 +134,18 @@ class MainActivity : ComponentActivity() {
             com.euthopiar.ui.splash.AppLaunchCoordinator.reset()
         }
 
-        // Automatic background reconciliation for Trakt, Simkl & Supabase Cloud
+        // Automatic background reconciliation for Trakt, Simkl & Supabase Cloud.
+        // Non-critical for first paint, so it waits for the splash ignition
+        // to finish (first frame) instead of competing with Home's first
+        // load for network and database. The timeout keeps it running even
+        // if ignition never reports finished; on a warm start ignition is
+        // already finished and this runs at once.
         lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                withTimeoutOrNull(15_000L) {
+                    com.euthopiar.ui.splash.AppLaunchCoordinator.isIgnitionActive.first { !it }
+                }
+            } catch (_: Exception) {}
             com.euthopiar.data.sync.MediaSyncManager.getInstance(applicationContext).syncAll()
             com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(applicationContext).syncAll()
         }

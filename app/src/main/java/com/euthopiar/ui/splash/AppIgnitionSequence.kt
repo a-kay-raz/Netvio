@@ -41,8 +41,6 @@ import com.euthopiar.ui.theme.AppTypography
 import com.euthopiar.ui.theme.Background
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -76,10 +74,9 @@ fun AppIgnitionSequence(
     val destinationMode by AppLaunchCoordinator.destinationMode.collectAsState()
     val reportedTarget by AppLaunchCoordinator.wordmarkTargetOffset.collectAsState()
 
-    // Reduced motion fast path
+    // Reduced motion fast path: no artificial wait, finish at once.
     if (reduceMotion) {
         LaunchedEffect(Unit) {
-            delay(120L)
             AppLaunchCoordinator.notifyIgnitionFinished()
             onIgnitionFinished()
         }
@@ -107,21 +104,15 @@ fun AppIgnitionSequence(
             )
         }
 
-        // Minimum fluid settling duration to establish visual anchor
-        val minDelayJob = launch { delay(300L) }
-
-        // Wait directly for Home catalog data to be 100% ready or Onboarding/PIN Lock fast path (safety ceiling of 8000ms for dead network)
+        // Release the splash as soon as the destination is known (Home, or
+        // the PIN lock), instead of waiting for the Home catalog data. The
+        // catalog fetch is network-bound and used to hold the splash up to
+        // 8s; Home already shows its own Loading state, so the user sees
+        // Home loading instead of a static splash. No minimum wait: the
+        // docking animation itself is the visual anchor.
         withTimeoutOrNull(8000L) {
-            combine(
-                AppLaunchCoordinator.isHomeDataReady,
-                AppLaunchCoordinator.destinationMode
-            ) { homeReady, mode ->
-                homeReady || mode == LaunchDestinationMode.ONBOARDING || mode == LaunchDestinationMode.PIN_LOCK
-            }.first { it }
+            AppLaunchCoordinator.destinationMode.first { it != LaunchDestinationMode.UNKNOWN }
         }
-
-        // Ensure minimum visual anchor presence
-        minDelayJob.join()
 
         breathingJob.cancel()
 
@@ -197,10 +188,10 @@ fun AppIgnitionSequence(
                 }
         )
 
-        // Shared Docking Wordmark ("EUTHOPIAR")
+        // Shared Docking Wordmark ("NETVIO")
         // Starts centered with hero presence (1.35x scale) and glides smoothly into TopHeaderBar (1.0x scale)
         // 100% Hardware-accelerated inside graphicsLayer (Zero Recomposition during 60/120fps motion)
-        val isNonHome = destinationMode == LaunchDestinationMode.ONBOARDING || destinationMode == LaunchDestinationMode.PIN_LOCK
+        val isNonHome = destinationMode == LaunchDestinationMode.PIN_LOCK
 
         Box(
             modifier = Modifier
@@ -210,7 +201,7 @@ fun AppIgnitionSequence(
                     val breath = breathingClock.value
                     val liveMode = destinationMode
                     val liveTarget = reportedTarget
-                    val nonHome = liveMode == LaunchDestinationMode.ONBOARDING || liveMode == LaunchDestinationMode.PIN_LOCK
+                    val nonHome = liveMode == LaunchDestinationMode.PIN_LOCK
 
                     val startScale = 1.35f
                     val startLeftX = (screenWidthPx - (textWidthPx * startScale)) / 2f
@@ -250,7 +241,7 @@ fun AppIgnitionSequence(
                 }
         ) {
             Text(
-                text = "EUTHOPIAR",
+                text = "NETVIO",
                 style = AppTypography.titleMedium.copy(
                     fontFamily = AppFontFamily,
                     fontWeight = FontWeight.Medium,

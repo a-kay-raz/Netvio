@@ -5,7 +5,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-enum class LaunchDestinationMode { UNKNOWN, HOME, ONBOARDING, PIN_LOCK }
+enum class LaunchDestinationMode { UNKNOWN, HOME, PIN_LOCK }
 
 /**
  * Coordinates dynamic early release and visual handoff between HomeScreen catalog readiness
