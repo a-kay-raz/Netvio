@@ -11,12 +11,12 @@ val LocalCardScaleMode = compositionLocalOf { CardScaleMode.FLAGSHIP }
 
 object CardDimensions {
     val BaseVerticalCardWidth: Dp = 135.dp
-    val BaseHorizontalCardWidth: Dp = 230.dp
-    val BaseHorizontalCardHeight: Dp = 130.dp
+    val BaseHorizontalCardWidth: Dp = 210.dp
+    val BaseHorizontalCardHeight: Dp = 118.dp
 
     fun verticalWidth(mode: CardScaleMode): Dp = (135f * mode.verticalFactor).dp
-    fun horizontalWidth(mode: CardScaleMode): Dp = (230f * mode.horizontalFactor).dp
-    fun horizontalHeight(mode: CardScaleMode): Dp = (130f * mode.horizontalFactor).dp
+    fun horizontalWidth(mode: CardScaleMode): Dp = (210f * mode.horizontalFactor).dp
+    fun horizontalHeight(mode: CardScaleMode): Dp = (118f * mode.horizontalFactor).dp
 
     /**
      * Horizontal gap between vertical 2:3 content cards across the 3 card sizes.
