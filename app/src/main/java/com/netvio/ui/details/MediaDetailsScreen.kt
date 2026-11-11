@@ -18,11 +18,7 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.EaseInOutCubic
 import androidx.compose.ui.text.style.TextAlign
 import kotlinx.coroutines.delay
 import androidx.compose.animation.fadeIn
@@ -400,18 +396,11 @@ fun MediaDetailsScreen(
                 label = "MediaDetailsTransition"
             ) { state ->
             when (state) {
+                // No loading screen by design: a poster tap goes straight to the
+                // details page the moment it is ready, with no splash, logo or
+                // loading background in between.
                 is MediaDetailsUiState.Loading -> {
-                    val resolvedLogo = state.logoUrl
-                        ?: initialLogoUrl
-                        ?: com.netvio.core.util.TmdbBridge.getCachedLogo(
-                            mediaId,
-                            parsedType == MediaType.TV_SERIES || parsedType == MediaType.ANIME
-                        )
-                    MediaDetailsLoadingView(
-                        title = state.title ?: initialTitle,
-                        logoUrl = resolvedLogo,
-                        screenBg = screenBg
-                    )
+                    Box(modifier = Modifier.fillMaxSize())
                 }
 
                 is MediaDetailsUiState.Error -> {
@@ -1946,94 +1935,6 @@ private fun DetailsBackdropHero(
                 isMuted = isMuted,
                 onToggle = onToggleMute
             )
-        }
-    }
-}
-
-/**
- * Cinematic loading view with content logo in the dead center of the screen
- * and calm breathing animation, without any back button.
- */
-@Composable
-private fun MediaDetailsLoadingView(
-    title: String?,
-    logoUrl: String?,
-    screenBg: Color,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    val cleanTitle = remember(title) { title?.let { sanitizeTitle(it) }.orEmpty() }
-
-    val infiniteTransition = rememberInfiniteTransition(label = "LoadingBreathe")
-    val breatheAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.82f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1400, easing = EaseInOutCubic),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "BreatheAlpha"
-    )
-    val breatheScale by infiniteTransition.animateFloat(
-        initialValue = 0.985f,
-        targetValue = 1.015f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1400, easing = EaseInOutCubic),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "BreatheScale"
-    )
-
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(screenBg),
-        contentAlignment = Alignment.Center
-    ) {
-        // 1. Optical Center Breathing Content Custom Logo (NO back button on loading screen)
-        var isLogoFailed by remember(logoUrl) { mutableStateOf(false) }
-
-        Box(
-            modifier = Modifier
-                .padding(horizontal = 32.dp)
-                .graphicsLayer {
-                    scaleX = breatheScale
-                    scaleY = breatheScale
-                    alpha = breatheAlpha
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            // Keep empty while logo resolves (no text flicker). Only render when logo is present.
-            if (!logoUrl.isNullOrBlank() && !isLogoFailed) {
-                // Soft radial ambient backlight (Peter Bakaus color science)
-                Box(
-                    modifier = Modifier
-                        .size(width = 300.dp, height = 130.dp)
-                        .background(
-                            Brush.radialGradient(
-                                colors = listOf(
-                                    Color.White.copy(alpha = 0.04f),
-                                    Color.Transparent
-                                )
-                            )
-                        )
-                )
-
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(logoUrl)
-                        .crossfade(260)
-                        .transformations(TrimTransparentTransformation())
-                        .build(),
-                    contentDescription = cleanTitle,
-                    onError = { isLogoFailed = true },
-                    modifier = Modifier
-                        .heightIn(min = 40.dp, max = 76.dp)
-                        .widthIn(max = 260.dp),
-                    contentScale = ContentScale.Fit,
-                    alignment = Alignment.Center
-                )
-            }
         }
     }
 }
