@@ -1988,8 +1988,8 @@ private fun DetailsTitleHeader(
             .crossfade(220)
             .transformations(TrimTransparentTransformation())
             .build(),
-        onSuccess = { result ->
-            val bitmap = (result.image as? BitmapImage)?.bitmap
+        onSuccess = { state ->
+            val bitmap = (state.result.image as? BitmapImage)?.bitmap
             logoUsable = bitmap?.let { !it.isMostlyDark() } ?: true
         },
         onError = { logoUsable = false }
