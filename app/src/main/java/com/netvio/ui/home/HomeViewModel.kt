@@ -380,8 +380,11 @@ class HomeViewModel(
         _pendingClearContinueWatching.value = true
         val job = viewModelScope.launch {
             delay(5000L)
-            val currentProvider = repository.activePlugin.value.name
-            libraryRepository.clearContinueWatching(currentProvider)
+            // Clear every provider, not just the active plugin: the Home
+            // list shows all providers, and the stored rows are TMDB items
+            // (provider "tmdb"), so scoping the dismiss to the active
+            // plugin's name matched zero rows and Clear did nothing.
+            libraryRepository.clearContinueWatching(null)
             _pendingClearContinueWatching.value = false
         }
         onUndoAvailable {
