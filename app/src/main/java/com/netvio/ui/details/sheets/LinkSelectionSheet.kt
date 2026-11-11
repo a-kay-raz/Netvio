@@ -295,8 +295,19 @@ fun LinkSelectionContent(
     }
 
     // Addons are toggled from the chip row below the best match. Session-only:
-    // nothing is persisted, so every sheet open starts with all addons collapsed.
+    // nothing is persisted. By default the first addon opens so its links are
+    // visible in expanded form right away; the rest stay collapsed until tapped.
     var expandedAddonIds by remember { mutableStateOf(emptySet<String>()) }
+    var defaultExpandedApplied by remember { mutableStateOf(false) }
+    LaunchedEffect(displayGroups) {
+        if (!defaultExpandedApplied) {
+            val first = displayGroups.firstOrNull()
+            if (first != null) {
+                expandedAddonIds = setOf(first.addonId)
+                defaultExpandedApplied = true
+            }
+        }
+    }
 
     Column(
         modifier = modifier
