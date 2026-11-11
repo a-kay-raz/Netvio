@@ -241,7 +241,7 @@ fun FloatingNavbar(
             NavbarRow(
                 tabs = tabs,
                 selectedIndex = selectedIndex,
-                height = 70.dp,
+                height = 54.dp,
                 reduceMotion = reduceMotion,
                 style = style,
                 onTabSelected = onTabSelected,
