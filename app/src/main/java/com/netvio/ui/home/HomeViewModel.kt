@@ -406,6 +406,7 @@ class HomeViewModel(
     }
 
     private var loadCatalogJob: kotlinx.coroutines.Job? = null
+    private var warmupJob: kotlinx.coroutines.Job? = null
 
     fun loadCatalog() {
         val prevJob = loadCatalogJob
@@ -443,6 +444,7 @@ class HomeViewModel(
     }
 
     private suspend fun fetchCatalog(isPullToRefresh: Boolean) {
+        warmupJob?.cancel()
         if (!isPullToRefresh && rawCatalogRows.isEmpty()) {
             _uiState.value = HomeUiState.Loading
         }
@@ -497,27 +499,12 @@ class HomeViewModel(
                 val otherCandidates = candidates.filter { it.logoUrl.isNullOrBlank() }.shuffled(providerRandom)
                 val heroCandidatesToResolve = (candidatesWithLogos + otherCandidates).take(8)
 
-                // 4. Concurrently resolve logos for hero candidates
-                val resolvedHeroes = coroutineScope {
-                    heroCandidatesToResolve.map { item ->
-                        async(Dispatchers.IO) {
-                            if (!item.logoUrl.isNullOrBlank()) {
-                                item
-                            } else {
-                                try {
-                                    withTimeoutOrNull(2500L) {
-                                        repository.resolveHeroItem(item)
-                                    } ?: item
-                                } catch (_: Throwable) {
-                                    item
-                                }
-                            }
-                        }
-                    }.awaitAll()
-                }
-
-                // Prioritize items that have verified studio clear logos (up to 6 in carousel)
-                val heroCandidatesPool = resolvedHeroes
+                // 4. Pick hero candidates now (items that already carry a logo
+                // go first). Missing logos resolve in the background AFTER the
+                // feed is shown (see below), so first paint never waits on
+                // them — on a slow connection the logo fetch alone cost up to
+                // 2.5s before anything appeared.
+                val heroCandidatesPool = heroCandidatesToResolve
                 val heroWithLogos = heroCandidatesPool.filter { !it.logoUrl.isNullOrBlank() }
                 val heroItems = if (heroWithLogos.size >= 4) {
                     heroWithLogos.take(6)
@@ -617,6 +604,65 @@ class HomeViewModel(
                                 .build()
                             imageLoader.enqueue(req)
                         } catch (_: Exception) {}
+                    }
+                }
+
+                // Resolve hero logos in the background and refresh the hero
+                // carousel when they arrive. The guard keeps a stale refresh
+                // from overwriting a newer catalog load.
+                viewModelScope.launch(Dispatchers.IO) {
+                    val resolved = coroutineScope {
+                        heroItems.map { item ->
+                            async {
+                                if (!item.logoUrl.isNullOrBlank()) {
+                                    item
+                                } else {
+                                    try {
+                                        withTimeoutOrNull(2500L) {
+                                            repository.resolveHeroItem(item)
+                                        } ?: item
+                                    } catch (_: Throwable) {
+                                        item
+                                    }
+                                }
+                            }
+                        }.awaitAll()
+                    }
+                    if (!isActive) return@launch
+                    if (rawHeroItems == heroItems && resolved != heroItems) {
+                        rawHeroItems = resolved
+                        updateSuccessState()
+                    }
+                }
+
+                // Warm the details cache for the items the user is most likely
+                // to tap (heroes + first rows), so a poster tap opens the
+                // details page from cache instead of waiting on a fresh
+                // network fetch. Bounded (12 items), sequential with a small
+                // gap so it never saturates the connection, and cancelled on
+                // the next catalog load.
+                warmupJob?.cancel()
+                warmupJob = viewModelScope.launch(Dispatchers.IO) {
+                    val candidates = (heroItems + rows.take(2).flatMap { it.items.take(6) })
+                        .distinctBy { it.id }
+                        .take(12)
+                    for (item in candidates) {
+                        if (!isActive) return@launch
+                        val cleanId = item.id.removePrefix("tmdb:").removePrefix("tmdb/").trim()
+                            .substringBefore(':').trim()
+                        if (cleanId.isEmpty() || !cleanId.all { it.isDigit() }) continue
+                        val isTv = item.type == com.netvio.core.model.MediaType.TV_SERIES ||
+                            item.type == com.netvio.core.model.MediaType.ANIME
+                        try {
+                            com.netvio.core.util.TmdbBridge.fetchEnrichedDetails(
+                                client = com.netvio.core.util.DohDns.metadataClient,
+                                tmdbId = cleanId,
+                                isTv = isTv,
+                                providerName = "tmdb"
+                            )
+                        } catch (_: Throwable) {
+                        }
+                        delay(150L)
                     }
                 }
 

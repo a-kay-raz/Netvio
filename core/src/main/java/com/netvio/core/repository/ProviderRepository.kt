@@ -118,13 +118,20 @@ open class ProviderRepository(
      * never reach Home and reordered rows arrive in the user's saved order.
      */
     suspend fun getHomeCatalog(): List<CatalogRow> = withContext(Dispatchers.IO) {
-        val tmdbRows = try {
-            TmdbBridge.fetchHomeCatalog(DohDns.metadataClient)
-        } catch (_: Exception) {
-            emptyList<CatalogRow>()
+        // TMDB feeds and Stremio rails are independent — fetch them in
+        // parallel instead of one after the other, so first paint waits for
+        // the slower of the two, not the sum. Order is preserved (TMDB rows
+        // first, then Stremio rails).
+        val tmdbDeferred = async {
+            try {
+                TmdbBridge.fetchHomeCatalog(DohDns.metadataClient)
+            } catch (_: Exception) {
+                emptyList<CatalogRow>()
+            }
         }
-
-        val stremioRows = fetchStremioCatalogRails(offset = 0, limit = 6)
+        val stremioDeferred = async { fetchStremioCatalogRails(offset = 0, limit = 6) }
+        val tmdbRows = tmdbDeferred.await()
+        val stremioRows = stremioDeferred.await()
         val preferences = readCatalogPreferences()
         // No fallback to the unfiltered rows: if the user hid every row the
         // Home is empty (falling back here used to silently un-hide them).
