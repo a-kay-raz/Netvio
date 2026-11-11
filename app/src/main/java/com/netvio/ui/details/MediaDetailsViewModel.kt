@@ -86,7 +86,6 @@ class MediaDetailsViewModel(
     private var currentFallbackTitle: String? = null
     private var currentFallbackPosterUrl: String? = null
     private var currentFallbackLogoUrl: String? = null
-    private var partialDetailId: String? = null
     private var hasUserManuallySelectedSeason = false
 
     fun loadDetails(
@@ -95,9 +94,7 @@ class MediaDetailsViewModel(
         type: MediaType? = null,
         fallbackTitle: String? = initialTitle,
         fallbackPosterUrl: String? = initialPosterUrl,
-        fallbackLogoUrl: String? = initialLogoUrl,
-        fallbackYear: Int? = null,
-        fallbackRating: String? = null
+        fallbackLogoUrl: String? = initialLogoUrl
     ) {
         hasUserManuallySelectedSeason = false
         watchlistObserverJob?.cancel()
@@ -152,25 +149,11 @@ class MediaDetailsViewModel(
 
         val isTv = type == MediaType.TV_SERIES || type == MediaType.ANIME
         val preloadedLogo = fallbackLogoUrl ?: com.netvio.core.util.TmdbBridge.getCachedLogo(mediaId, isTv)
-        // Show the page immediately from the data the tap already carried
-        // (title, poster, year, rating) instead of a loading screen: the
-        // rest (synopsis, genres, cast, episodes) fills in when the fetch
-        // lands. The fetch below replaces this partial detail in place.
-        val partialDetail = com.netvio.core.model.MediaDetail(
-            id = mediaId,
-            title = fallbackTitle?.takeIf { it.isNotBlank() } ?: "Media Details",
-            url = "",
+        _uiState.value = MediaDetailsUiState.Loading(
+            title = fallbackTitle,
             posterUrl = fallbackPosterUrl,
-            backdropUrl = fallbackPosterUrl,
-            type = type ?: MediaType.MOVIE,
-            year = fallbackYear,
-            synopsis = null,
-            rating = fallbackRating,
-            provider = provider,
             logoUrl = preloadedLogo
         )
-        partialDetailId = mediaId
-        _uiState.value = MediaDetailsUiState.Success(partialDetail)
 
         if (preloadedLogo.isNullOrBlank()) {
             viewModelScope.launch(Dispatchers.IO) {
@@ -188,8 +171,6 @@ class MediaDetailsViewModel(
                         val current = _uiState.value
                         if (current is MediaDetailsUiState.Loading) {
                             _uiState.value = current.copy(logoUrl = resolvedLogo)
-                        } else if (current is MediaDetailsUiState.Success && partialDetailId == mediaId) {
-                            _uiState.value = current.copy(detail = current.detail.copy(logoUrl = resolvedLogo))
                         }
                     }
                 } catch (_: Throwable) {}
@@ -228,7 +209,6 @@ class MediaDetailsViewModel(
 
                 // 1. Immediately reveal the screen with core details and existing cast
                 _cast.value = detail.cast
-                partialDetailId = null
                 _uiState.value = MediaDetailsUiState.Success(detail)
 
                 // 2. Asynchronously enrich cast members in the background without gating the UI
@@ -249,7 +229,6 @@ class MediaDetailsViewModel(
                 }
             } catch (t: Throwable) {
                 android.util.Log.w("MediaDetailsViewModel", "Failed to load media details for $mediaId", t)
-                partialDetailId = null
                 _uiState.value = MediaDetailsUiState.Error(
                     error = t.toUserError()
                 )
