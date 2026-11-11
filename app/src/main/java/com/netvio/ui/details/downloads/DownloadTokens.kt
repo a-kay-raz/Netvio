@@ -94,6 +94,8 @@ object DownloadTokens {
 
     // Durations & Tuning Constants
     const val DIRECT_SOURCE_SEED_THRESHOLD = 100
+    /** Playback best match (Choose Stream sheet only): streams heavier than this are never the best match. */
+    const val PLAYBACK_BEST_MATCH_MAX_SIZE_GB = 4.0
     const val DISMISS_DELAY_MS = 140L
     const val SHIMMER_DURATION_MS = 1200
     const val COUNT_UP_DURATION_MS = 240
@@ -162,6 +164,63 @@ object DownloadTokens {
         }
 
         return RankedStreams(hero = hero, remaining = remainingPool)
+    }
+
+    /**
+     * Playback best match for the Choose Stream (long-press Play) sheet only.
+     * The Downloads sheet keeps [rankAndPartitionStreams] unchanged.
+     *
+     * This is deliberately NOT highest quality: the best match is the stream
+     * most likely to play fast, reliably and buffer-free, with no filter UI.
+     * - Streams with a known size above [PLAYBACK_BEST_MATCH_MAX_SIZE_GB] are
+     *   never the best match (heavy files buffer most); unknown sizes stay
+     *   eligible so a missing size never hides every stream.
+     * - Direct streams win over peer torrents: they start instantly with no
+     *   peer wait. Server-cached torrents ([StreamItem.isCached]) count as
+     *   direct here because the file is already on a server.
+     * - Among those, the smallest known size wins: for the same title a
+     *   smaller file means a lower bitrate, so the least buffering. Unknown
+     *   sizes sort last, after every known size.
+     * - Fallbacks, in order: highest-seed torrent within the cap, then the
+     *   smallest instant stream ignoring the cap, then the highest-seed
+     *   torrent ignoring the cap. The rows below the hero keep their own
+     *   order; only the hero pick changes.
+     */
+    fun selectPlaybackBestMatch(streams: List<StreamItem>): StreamItem? {
+        if (streams.isEmpty()) return null
+        val (withinCap, overCap) = streams.partition { stream ->
+            val sizeGb = playbackSizeInGb(stream)
+            sizeGb == null || sizeGb <= PLAYBACK_BEST_MATCH_MAX_SIZE_GB
+        }
+        return pickPlaybackBestFromPool(withinCap)
+            ?: pickPlaybackBestFromPool(overCap)
+            ?: streams.first()
+    }
+
+    private fun pickPlaybackBestFromPool(pool: List<StreamItem>): StreamItem? {
+        if (pool.isEmpty()) return null
+        val instant = pool.filter { !it.isTorrentStream || it.isCached }
+        val smallestInstant = instant.minByOrNull { playbackSizeInGb(it) ?: Double.MAX_VALUE }
+        if (smallestInstant != null) return smallestInstant
+        return pool.filter { it.isTorrentStream && !it.isCached }
+            .maxByOrNull { it.seeders ?: 0 }
+    }
+
+    /** Stream size in gigabytes, or null when the size is missing or unparseable. */
+    private fun playbackSizeInGb(stream: StreamItem): Double? {
+        val raw = stream.size?.takeIf { it.isNotBlank() } ?: return null
+        val cleaned = raw.replace(",", "").trim().removePrefix("~").trim()
+        val match = Regex("""([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]+)?""").find(cleaned) ?: return null
+        val numeric = match.groupValues[1].toDoubleOrNull() ?: return null
+        val factor = when (match.groupValues[2].uppercase(Locale.US)) {
+            "TB" -> 1024.0
+            "GB", "" -> 1.0
+            "MB" -> 1.0 / 1024.0
+            "KB" -> 1.0 / (1024.0 * 1024.0)
+            "B" -> 1.0 / (1024.0 * 1024.0 * 1024.0)
+            else -> return null
+        }
+        return numeric * factor
     }
 
     /**

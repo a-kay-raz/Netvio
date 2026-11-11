@@ -262,12 +262,13 @@ fun LinkSelectionContent(
     val maxSheetHeight = (configuration.screenHeightDp * DownloadTokens.sheetMaxHeightRatio).dp
     val hasStreams = groups.any { it.streams.isNotEmpty() }
 
-    // Best match: same ranking rule as the Downloads sheet
-    // (DownloadTokens.rankAndPartitionStreams — highest-seed torrent, else
-    // first direct). The hero is lifted out of the grouped list and shown once
-    // as a card on top; the groups below keep their order, minus the hero.
+    // Best match: fast, reliable, buffer-free playback — NOT highest quality
+    // (DownloadTokens.selectPlaybackBestMatch: direct or server-cached first,
+    // known size at most 4 GB, smallest file wins; no filter UI). The hero is
+    // lifted out of the grouped list and shown once as a card on top; the
+    // groups below keep their order, minus the hero.
     val heroStream = remember(groups) {
-        DownloadTokens.rankAndPartitionStreams(groups.flatMap { it.streams }).hero
+        DownloadTokens.selectPlaybackBestMatch(groups.flatMap { it.streams })
     }
     val heroKey = remember(heroStream) {
         heroStream?.let { stream ->
