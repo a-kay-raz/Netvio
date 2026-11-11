@@ -2,6 +2,7 @@ package com.netvio.ui.details.sheets
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,9 +18,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,7 +34,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -67,6 +71,7 @@ import com.netvio.core.streams.StreamsRepository
 import com.netvio.core.streams.sortedForGroupedDisplay
 import com.netvio.ui.details.downloads.DownloadTokens
 import com.netvio.ui.theme.AppFontFamily
+import com.netvio.ui.theme.SurfaceLow
 import com.netvio.ui.theme.pressable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -288,6 +293,10 @@ fun LinkSelectionContent(
         }
     }
 
+    // Per-addon boxes can be collapsed from the card header. Session-only:
+    // nothing is persisted, so every sheet open starts fully expanded.
+    var collapsedAddonIds by remember { mutableStateOf(emptySet<String>()) }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -453,41 +462,70 @@ fun LinkSelectionContent(
                         }
                     }
 
+                    // Each addon gets its own box, managed from the box header (collapse/expand).
                     displayGroups.forEach { group ->
-                        item(key = "link_group_header_${group.addonId}") {
-                            Text(
-                                text = "${group.addonName} · ${group.streams.size}",
-                                style = TextStyle(
-                                    fontFamily = AppFontFamily,
-                                    fontWeight = FontWeight.Medium,
-                                    fontSize = 12.sp,
-                                    color = DownloadTokens.textMuted
-                                ),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 10.dp, bottom = 4.dp)
-                            )
-                        }
-                        items(
-                            items = group.streams,
-                            key = { stream ->
-                                val id = stream.playableDirectUrl ?: stream.effectiveMagnetOrHash ?: stream.url
-                                    ?: "${stream.name}_${stream.title}_${stream.size}"
-                                "${stream.addonId}_${id}_${stream.quality.orEmpty()}"
-                            }
-                        ) { stream ->
+                        item(key = "link_group_${group.addonId}") {
+                            val isCollapsed = group.addonId in collapsedAddonIds
                             Column(modifier = Modifier.fillMaxWidth()) {
-                                LinkStreamRow(
-                                    stream = stream,
-                                    onClick = { onStreamSelected(stream) },
-                                    onLongClick = onLongClick?.let { { it(stream) } }
-                                )
-                                HorizontalDivider(
-                                    thickness = DownloadTokens.hairlineHeight,
-                                    color = DownloadTokens.hairline
-                                )
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(DownloadTokens.pressedSurface)
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .pressable(
+                                                onClickLabel = if (isCollapsed) "Expand ${group.addonName}" else "Collapse ${group.addonName}",
+                                                onClick = {
+                                                    collapsedAddonIds = if (isCollapsed) {
+                                                        collapsedAddonIds - group.addonId
+                                                    } else {
+                                                        collapsedAddonIds + group.addonId
+                                                    }
+                                                }
+                                            )
+                                            .padding(vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "${group.addonName} · ${group.streams.size}",
+                                            style = TextStyle(
+                                                fontFamily = AppFontFamily,
+                                                fontWeight = FontWeight.Medium,
+                                                fontSize = 13.sp,
+                                                color = DownloadTokens.textPrimary
+                                            ),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Icon(
+                                            imageVector = if (isCollapsed) Icons.Outlined.KeyboardArrowDown else Icons.Outlined.KeyboardArrowUp,
+                                            contentDescription = if (isCollapsed) "Expand ${group.addonName}" else "Collapse ${group.addonName}",
+                                            tint = DownloadTokens.textMuted,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                    if (!isCollapsed) {
+                                        group.streams.forEachIndexed { index, stream ->
+                                            LinkStreamRow(
+                                                stream = stream,
+                                                onClick = { onStreamSelected(stream) },
+                                                onLongClick = onLongClick?.let { { it(stream) } }
+                                            )
+                                            if (index < group.streams.lastIndex) {
+                                                HorizontalDivider(
+                                                    thickness = DownloadTokens.hairlineHeight,
+                                                    color = DownloadTokens.hairline
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(10.dp))
                             }
                         }
                     }
