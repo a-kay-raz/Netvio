@@ -400,7 +400,9 @@ fun AppNavHost(
                                 type = item.type.name,
                                 title = item.title,
                                 posterUrl = item.posterUrl ?: item.backdropUrl,
-                                logoUrl = item.logoUrl
+                                logoUrl = item.logoUrl,
+                                year = item.year,
+                                rating = item.rating
                             )
                         )
                     },
@@ -468,7 +470,9 @@ fun AppNavHost(
                                 type = item.type.name,
                                 title = item.title,
                                 posterUrl = item.posterUrl ?: item.backdropUrl,
-                                logoUrl = item.logoUrl
+                                logoUrl = item.logoUrl,
+                                year = item.year,
+                                rating = item.rating
                             )
                         )
                     },
@@ -497,7 +501,7 @@ fun AppNavHost(
             }
 
             composable(
-                route = "details/{mediaId}?provider={provider}&type={type}&depth={depth}&title={title}&posterUrl={posterUrl}&logoUrl={logoUrl}",
+                route = "details/{mediaId}?provider={provider}&type={type}&depth={depth}&title={title}&posterUrl={posterUrl}&logoUrl={logoUrl}&year={year}&rating={rating}",
                 arguments = listOf(
                     navArgument("mediaId") { type = NavType.StringType },
                     navArgument("provider") { type = NavType.StringType; nullable = true; defaultValue = null },
@@ -505,7 +509,9 @@ fun AppNavHost(
                     navArgument("depth") { type = NavType.IntType; defaultValue = 1 },
                     navArgument("title") { type = NavType.StringType; nullable = true; defaultValue = null },
                     navArgument("posterUrl") { type = NavType.StringType; nullable = true; defaultValue = null },
-                    navArgument("logoUrl") { type = NavType.StringType; nullable = true; defaultValue = null }
+                    navArgument("logoUrl") { type = NavType.StringType; nullable = true; defaultValue = null },
+                    navArgument("year") { type = NavType.IntType; defaultValue = -1 },
+                    navArgument("rating") { type = NavType.StringType; nullable = true; defaultValue = null }
                 ),
                 enterTransition = {
                     if (reduceMotion) {
@@ -559,6 +565,9 @@ fun AppNavHost(
                 val initialPosterUrl = rawPosterUrl?.takeIf { it.isNotBlank() }
                 val rawLogoUrl = backStackEntry.arguments?.getString("logoUrl")
                 val initialLogoUrl = rawLogoUrl?.takeIf { it.isNotBlank() }
+                val initialYear = backStackEntry.arguments?.getInt("year")?.takeIf { it >= 0 }
+                val rawRating = backStackEntry.arguments?.getString("rating")
+                val initialRating = rawRating?.takeIf { it.isNotBlank() }
                 MediaDetailsScreen(
                     mediaId = mediaId,
                     provider = provider,
@@ -566,6 +575,8 @@ fun AppNavHost(
                     initialTitle = initialTitle,
                     initialPosterUrl = initialPosterUrl,
                     initialLogoUrl = initialLogoUrl,
+                    initialYear = initialYear,
+                    initialRating = initialRating,
                     depth = depth,
                     onBack = {
                         val currentEntry = navController.currentBackStackEntry
@@ -593,7 +604,9 @@ fun AppNavHost(
                                 depth = depth + 1,
                                 title = rec.title,
                                 posterUrl = rec.posterUrl ?: rec.backdropUrl,
-                                logoUrl = rec.logoUrl
+                                logoUrl = rec.logoUrl,
+                                year = rec.year,
+                                rating = rec.rating
                             )
                         )
                     },
@@ -1325,7 +1338,9 @@ internal fun buildDetailsRoute(
     depth: Int = 1,
     title: String? = null,
     posterUrl: String? = null,
-    logoUrl: String? = null
+    logoUrl: String? = null,
+    year: Int? = null,
+    rating: String? = null
 ): String {
     val safeId = mediaId.trim().ifBlank { "unknown" }
     val encodedId = safeDoubleEncode(safeId)
@@ -1335,7 +1350,9 @@ internal fun buildDetailsRoute(
     val encodedTitle = title?.let { rfc3986Encode(it) } ?: ""
     val posterQuery = if (!posterUrl.isNullOrBlank()) "&posterUrl=${rfc3986Encode(posterUrl)}" else ""
     val logoQuery = if (!logoUrl.isNullOrBlank()) "&logoUrl=${rfc3986Encode(logoUrl)}" else ""
-    return "details/$encodedId?provider=$encodedProv&type=$typeStr&depth=$depth&title=$encodedTitle$posterQuery$logoQuery"
+    val yearQuery = if (year != null) "&year=$year" else ""
+    val ratingQuery = if (!rating.isNullOrBlank()) "&rating=${rfc3986Encode(rating)}" else ""
+    return "details/$encodedId?provider=$encodedProv&type=$typeStr&depth=$depth&title=$encodedTitle$posterQuery$logoQuery$yearQuery$ratingQuery"
 }
 
 internal fun buildPlayerRoute(

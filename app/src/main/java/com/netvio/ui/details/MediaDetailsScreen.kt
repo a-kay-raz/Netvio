@@ -236,6 +236,8 @@ fun MediaDetailsScreen(
     initialTitle: String? = null,
     initialPosterUrl: String? = null,
     initialLogoUrl: String? = null,
+    initialYear: Int? = null,
+    initialRating: String? = null,
     depth: Int = 1,
     onBack: () -> Unit,
     onCloseToRoot: (() -> Unit)? = null,
@@ -304,7 +306,9 @@ fun MediaDetailsScreen(
             type = parsedType,
             fallbackTitle = initialTitle,
             fallbackPosterUrl = initialPosterUrl,
-            fallbackLogoUrl = initialLogoUrl
+            fallbackLogoUrl = initialLogoUrl,
+            fallbackYear = initialYear,
+            fallbackRating = initialRating
         )
     }
 
