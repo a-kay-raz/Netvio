@@ -26,9 +26,9 @@ enum class CardScaleMode(
     val verticalFactor: Float,
     val horizontalFactor: Float
 ) {
-    FLAGSHIP("flagship", "Large (Default)", "2.0x Vertical, 1.5x Horizontal cards", 2.0f, 1.5f),
-    BALANCED("balanced", "Balanced", "1.5x Vertical, 1.25x Horizontal cards", 1.5f, 1.25f),
-    COMPACT("compact", "Compact (Original)", "1.0x Vertical, 1.0x Horizontal cards", 1.0f, 1.0f);
+    FLAGSHIP("flagship", "Large (Default)", "1.5x Vertical, 1.5x Horizontal cards", 1.5f, 1.5f),
+    BALANCED("balanced", "Balanced", "1.0x Vertical, 1.25x Horizontal cards", 1.0f, 1.25f),
+    COMPACT("compact", "Compact (Original)", "0.5x Vertical, 1.0x Horizontal cards", 0.5f, 1.0f);
 
     companion object {
         fun fromId(id: String?): CardScaleMode = entries.firstOrNull { it.id == id } ?: FLAGSHIP
