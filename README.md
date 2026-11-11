@@ -28,7 +28,6 @@
 
 [![Download APK](https://img.shields.io/badge/⬇%20%20DOWNLOAD%20APK-E50914?style=for-the-badge&logoColor=white&labelColor=141414)](https://github.com/a-kay-raz/Netvio/releases/latest)
 [![All Releases](https://img.shields.io/badge/📦%20%20ALL%20RELEASES-141414?style=for-the-badge&logoColor=white&labelColor=E50914)](https://github.com/a-kay-raz/Netvio/releases)
-[![Support](https://img.shields.io/badge/☕%20%20SUPPORT-FFDD00?style=for-the-badge&logoColor=black&labelColor=000000)](https://buymeacoffee.com/TheARCreactorGUY)
 
 </div>
 
@@ -271,25 +270,7 @@ Not right now. Android is live, and **Android TV** is next on the list.
 
 <br/>
 
-## ☕ Support the Project
-
-Netvio is **free and open source**. If you enjoy it, buying me a coffee helps keep the app alive and growing!
-
-<div align="center">
-
-[![Buy Me A Coffee](https://img.shields.io/badge/☕%20%20BUY%20ME%20A%20COFFEE-FFDD00?style=for-the-badge&logoColor=black&labelColor=000000)](https://buymeacoffee.com/TheARCreactorGUY)
-
-<a href="https://buymeacoffee.com/TheARCreactorGUY"><img src="screenshots/bmc-qr.png" width="200" alt="Buy Me A Coffee QR code"/></a>
-
-*Scan the QR code or click the button above.*
-
-</div>
-
-<br/>
-
 ## ⭐ Star the Repo
-
-Can't donate? A **star ⭐** is free and helps a ton!
 
 <div align="center">
 
