@@ -27,7 +27,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.euthopiar.core.model.ContentRegionPreset
 import com.euthopiar.data.preferences.CardScaleMode
 import com.euthopiar.data.preferences.SectionLabelStyle
 import com.euthopiar.data.preferences.Top10Style
@@ -63,7 +62,6 @@ fun AppearanceSettingsPage(
 ) {
     val haptic = LocalHapticFeedback.current
 
-    val contentRegionPreset by viewModel.contentRegionPreset.collectAsState()
     val cardScale by viewModel.cardScaleMode.collectAsState()
     val top10Style by viewModel.top10Style.collectAsState()
     val sectionLabelStyle by viewModel.sectionLabelStyle.collectAsState()
@@ -72,16 +70,6 @@ fun AppearanceSettingsPage(
     val amoledMode by viewModel.amoledMode.collectAsState()
 
     var showResetDialog by remember { mutableStateOf(false) }
-
-    val regionOptions = remember {
-        ContentRegionPreset.entries.map { preset ->
-            PopoverOption(
-                value = preset,
-                title = preset.displayName,
-                description = preset.subtitle
-            )
-        }
-    }
 
     val longPressOptions = remember {
         LongPressSheetStyle.entries.map { style ->
@@ -109,20 +97,6 @@ fun AppearanceSettingsPage(
 
         // Section 1: Home Catalog & Scaling
         OpenSettingsSectionHeader(title = "Home Catalog & Scaling")
-
-        OpenSettingsRow(
-            title = "Catalog region & subregion",
-            subtitle = contentRegionPreset.subtitle,
-            trailingContent = {
-                FrostedGlassDropdown(
-                    options = regionOptions,
-                    selected = contentRegionPreset,
-                    onSelected = { viewModel.setContentRegionPreset(it) },
-                    hazeState = hazeState,
-                    popoverWidth = 290.dp
-                )
-            }
-        )
 
         // 1. Poster Card Scale Row
         Column(

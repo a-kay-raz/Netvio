@@ -112,8 +112,6 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.request.error
 import coil3.request.fallback
-import com.euthopiar.core.model.ContentRegionPreset
-import com.euthopiar.core.util.TmdbBridge
 import com.euthopiar.data.preferences.CardScaleMode
 import com.euthopiar.data.preferences.NavbarStyle
 import com.euthopiar.data.preferences.PreferencesRepository
@@ -133,7 +131,6 @@ import com.euthopiar.ui.profile.ProfileGlassPill
 import com.euthopiar.ui.profile.ProfileGlassTokens
 import com.euthopiar.ui.profile.ProfileGlassToggle
 import com.euthopiar.ui.theme.AppFontFamily
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.heightIn
@@ -189,9 +186,6 @@ fun OnboardingScreen(
     var profilePinHash by remember { mutableStateOf<String?>(null) }
     var profilePlainPin by remember { mutableStateOf<String?>(null) }
 
-    val initialRegionPreset by preferencesRepository.contentRegionPreset.collectAsState(initial = ContentRegionPreset.GLOBAL)
-    var selectedRegionPreset by remember(initialRegionPreset) { mutableStateOf(initialRegionPreset) }
-
     // Page 3: Customize State
     var selectedCardScale by remember(initialCardScale) { mutableStateOf(initialCardScale) }
     var isAmoledActive by remember(preferenceAmoled) { mutableStateOf(preferenceAmoled) }
@@ -230,8 +224,6 @@ fun OnboardingScreen(
             preferencesRepository.setNavbarStyle(NavbarStyle.FLOATING)
             preferencesRepository.setCardScaleMode(selectedCardScale)
             preferencesRepository.setAmoledMode(isAmoledActive)
-            preferencesRepository.setContentRegionPreset(selectedRegionPreset)
-            TmdbBridge.activeRegionPreset = selectedRegionPreset
 
             // 3. Replicate final onboarding profile & settings to cloud if signed in
             syncManager.scheduleSync(500L)
@@ -430,8 +422,6 @@ fun OnboardingScreen(
                                 preferencesRepository.setAmoledMode(enabled)
                             }
                         },
-                        selectedRegionPreset = selectedRegionPreset,
-                        onRegionPresetChanged = { selectedRegionPreset = it },
                         isSubmitting = isSubmitting,
                         previewItems = postersState.previewPosters,
                         isLoadingPosters = postersState.isLoading,
@@ -1416,47 +1406,12 @@ private fun OnboardingPage2Profile(
  * - Removed Navigation block
  * - Pinned 52 dp white pill "Enter Euthopiar" with spinner on loading
  */
-private fun getRegionFlag(preset: ContentRegionPreset): String = getRegionCode(preset)
-
-private fun getRegionCode(preset: ContentRegionPreset): String = when (preset) {
-    ContentRegionPreset.GLOBAL -> "GL"
-    ContentRegionPreset.INDIA_ALL -> "IN"
-    ContentRegionPreset.SOUTH_INDIA_ALL -> "IN"
-    ContentRegionPreset.SOUTH_INDIA_TELUGU -> "TE"
-    ContentRegionPreset.SOUTH_INDIA_TAMIL -> "TA"
-    ContentRegionPreset.SOUTH_INDIA_MALAYALAM -> "ML"
-    ContentRegionPreset.SOUTH_INDIA_KANNADA -> "KN"
-    ContentRegionPreset.NORTH_INDIA_HINDI -> "HI"
-    ContentRegionPreset.UNITED_STATES -> "US"
-    ContentRegionPreset.UNITED_KINGDOM -> "UK"
-    ContentRegionPreset.SOUTH_KOREA -> "KR"
-    ContentRegionPreset.JAPAN -> "JP"
-}
-
-private fun getRegionCode(id: String): String = when (id.lowercase()) {
-    "global" -> "GL"
-    "india_all" -> "IN"
-    "south_india_all" -> "IN"
-    "south_india_telugu", "telugu" -> "TE"
-    "south_india_tamil", "tamil" -> "TA"
-    "south_india_malayalam", "malayalam" -> "ML"
-    "south_india_kannada", "kannada" -> "KN"
-    "north_india_hindi", "hindi" -> "HI"
-    "united_states", "us" -> "US"
-    "united_kingdom", "uk" -> "UK"
-    "south_korea", "korea" -> "KR"
-    "japan" -> "JP"
-    else -> id.take(2).uppercase()
-}
-
 @Composable
 private fun OnboardingPage3Customize(
     selectedCardScale: CardScaleMode,
     onCardScaleChanged: (CardScaleMode) -> Unit,
     isAmoled: Boolean,
     onAmoledChanged: (Boolean) -> Unit,
-    selectedRegionPreset: ContentRegionPreset,
-    onRegionPresetChanged: (ContentRegionPreset) -> Unit,
     isSubmitting: Boolean,
     onEnterSanctuary: () -> Unit,
     hazeState: HazeState,
@@ -1543,278 +1498,11 @@ private fun OnboardingPage3Customize(
                     cardScale = selectedCardScale,
                     isAmoled = isAmoled,
                     hazeState = hazeState,
-                    selectedRegionPreset = selectedRegionPreset,
                     previewItems = previewItems,
                     isLoading = isLoadingPosters,
                 )
 
                 Spacer(modifier = Modifier.height(22.dp))
-
-                // HERO CHOICE BLOCK 1: CONTENT REGION (Primary Home Screen Curation Decision)
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 10.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "CONTENT REGION",
-                            style = TextStyle(
-                                fontFamily = AppFontFamily,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 11.sp,
-                                lineHeight = 14.sp,
-                                letterSpacing = 0.10.em,
-                                color = OnboardingTokens.TextMuted45,
-                            ),
-                        )
-
-                        // Active Region Badge Pill
-                        Box(
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.10f))
-                                .border(0.5.dp, Color.White.copy(alpha = 0.20f), CircleShape)
-                                .padding(horizontal = 10.dp, vertical = 3.dp),
-                        ) {
-                            Text(
-                                text = "${getRegionCode(selectedRegionPreset)} · ${selectedRegionPreset.cleanName}",
-                                style = TextStyle(
-                                    fontFamily = AppFontFamily,
-                                    fontWeight = FontWeight.Medium,
-                                    fontSize = 11.sp,
-                                    color = Color.White,
-                                ),
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Text(
-                        text = "Shapes what movies, series, and regional cinema appear on your home feed.",
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontWeight = FontWeight.Normal,
-                            fontSize = 13.sp,
-                            lineHeight = 18.sp,
-                            color = OnboardingTokens.TextMuted55,
-                        ),
-                    )
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // Region Category Filter Chips
-                    var regionFilter by remember { mutableStateOf("Popular") }
-                    val filterTabs = listOf("Popular", "India & Regional", "International", "All")
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        filterTabs.forEach { tab ->
-                            val isTabSelected = regionFilter == tab
-                            val tabBg by animateColorAsState(
-                                targetValue = if (isTabSelected) Color.White else Color.White.copy(alpha = 0.06f),
-                                animationSpec = tween(120),
-                                label = "regionTabBg_$tab"
-                            )
-                            val tabTextColor by animateColorAsState(
-                                targetValue = if (isTabSelected) OnboardingTokens.TextDarkButton else OnboardingTokens.TextMuted70,
-                                animationSpec = tween(120),
-                                label = "regionTabText_$tab"
-                            )
-
-                            Box(
-                                modifier = Modifier
-                                    .heightIn(min = 36.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(tabBg)
-                                    .border(
-                                        0.5.dp,
-                                        if (isTabSelected) Color.White else Color.White.copy(alpha = 0.10f),
-                                        RoundedCornerShape(10.dp)
-                                    )
-                                    .pressable(
-                                        scaleDown = 0.96f,
-                                        onClick = { regionFilter = tab }
-                                    )
-                                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = tab,
-                                    style = TextStyle(
-                                        fontFamily = AppFontFamily,
-                                        fontWeight = if (isTabSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                        fontSize = 12.sp,
-                                        color = tabTextColor,
-                                    ),
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    val displayedPresets = remember(regionFilter) {
-                        when (regionFilter) {
-                            "Popular" -> listOf(
-                                ContentRegionPreset.GLOBAL,
-                                ContentRegionPreset.INDIA_ALL,
-                                ContentRegionPreset.NORTH_INDIA_HINDI,
-                                ContentRegionPreset.SOUTH_INDIA_TELUGU,
-                                ContentRegionPreset.UNITED_STATES,
-                                ContentRegionPreset.SOUTH_KOREA,
-                                ContentRegionPreset.JAPAN
-                            )
-                            "India & Regional" -> listOf(
-                                ContentRegionPreset.INDIA_ALL,
-                                ContentRegionPreset.NORTH_INDIA_HINDI,
-                                ContentRegionPreset.SOUTH_INDIA_ALL,
-                                ContentRegionPreset.SOUTH_INDIA_TELUGU,
-                                ContentRegionPreset.SOUTH_INDIA_TAMIL,
-                                ContentRegionPreset.SOUTH_INDIA_MALAYALAM,
-                                ContentRegionPreset.SOUTH_INDIA_KANNADA
-                            )
-                            "International" -> listOf(
-                                ContentRegionPreset.GLOBAL,
-                                ContentRegionPreset.UNITED_STATES,
-                                ContentRegionPreset.UNITED_KINGDOM,
-                                ContentRegionPreset.SOUTH_KOREA,
-                                ContentRegionPreset.JAPAN
-                            )
-                            else -> ContentRegionPreset.entries.toList()
-                        }
-                    }
-
-                    // High-contrast, tactile region cards
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .animateContentSize(animationSpec = spring(dampingRatio = 0.85f, stiffness = 400f)),
-                    ) {
-                        displayedPresets.forEach { preset ->
-                            val isSelected = preset == selectedRegionPreset
-                            val cardBg by animateColorAsState(
-                                targetValue = if (isSelected) Color.White.copy(alpha = 0.12f) else OnboardingTokens.GlassFill,
-                                animationSpec = tween(150),
-                                label = "regionCardBg_${preset.id}"
-                            )
-                            val cardBorder by animateColorAsState(
-                                targetValue = if (isSelected) Color.White.copy(alpha = 0.50f) else OnboardingTokens.GlassHairlineBorder,
-                                animationSpec = tween(150),
-                                label = "regionCardBorder_${preset.id}"
-                            )
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(cardBg)
-                                    .border(0.5.dp, cardBorder, RoundedCornerShape(14.dp))
-                                    .pressable(
-                                        scaleDown = 0.98f,
-                                        onClick = { onRegionPresetChanged(preset) },
-                                    )
-                                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            Color.White.copy(alpha = if (isSelected) 0.14f else 0.06f),
-                                            CircleShape
-                                        )
-                                        .border(
-                                            0.5.dp,
-                                            Color.White.copy(alpha = if (isSelected) 0.28f else 0.12f),
-                                            CircleShape
-                                        ),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Text(
-                                        text = getRegionCode(preset),
-                                        style = TextStyle(
-                                            fontFamily = AppFontFamily,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            letterSpacing = 0.6.sp,
-                                            color = Color.White,
-                                        ),
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.width(12.dp))
-
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                ) {
-                                    Text(
-                                        text = preset.displayName,
-                                        style = TextStyle(
-                                            fontFamily = AppFontFamily,
-                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                                            fontSize = 14.sp,
-                                            lineHeight = 18.sp,
-                                            color = Color.White,
-                                        ),
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = preset.subtitle,
-                                        style = TextStyle(
-                                            fontFamily = AppFontFamily,
-                                            fontWeight = FontWeight.Normal,
-                                            fontSize = 11.sp,
-                                            lineHeight = 15.sp,
-                                            color = if (isSelected) Color.White.copy(alpha = 0.75f) else OnboardingTokens.TextMuted50,
-                                        ),
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.width(10.dp))
-
-                                Box(
-                                    modifier = Modifier
-                                        .size(20.dp)
-                                        .clip(CircleShape)
-                                        .background(if (isSelected) Color.White else Color.Transparent)
-                                        .border(
-                                            width = if (isSelected) 0.dp else 1.dp,
-                                            color = if (isSelected) Color.Transparent else Color.White.copy(alpha = 0.30f),
-                                            shape = CircleShape
-                                        ),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    androidx.compose.animation.AnimatedVisibility(
-                                        visible = isSelected,
-                                        enter = scaleIn(initialScale = 0.90f, animationSpec = EuthopiarMotionTokens.SpringMicro) + fadeIn(tween(150)),
-                                        exit = scaleOut(targetScale = 0.90f) + fadeOut(tween(120)),
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.Check,
-                                            contentDescription = "Selected",
-                                            tint = OnboardingTokens.TextDarkButton,
-                                            modifier = Modifier.size(13.dp),
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
 
                 HorizontalDivider(
                     thickness = OnboardingTokens.HairlineWidth,
@@ -1961,7 +1649,6 @@ private fun OnboardingLivePreviewCard(
     cardScale: CardScaleMode,
     isAmoled: Boolean,
     hazeState: HazeState,
-    selectedRegionPreset: ContentRegionPreset = ContentRegionPreset.GLOBAL,
     previewItems: List<ShowcasePosterItem> = ShowcaseRowTop.take(5),
     isLoading: Boolean = false,
     modifier: Modifier = Modifier,
@@ -1996,10 +1683,9 @@ private fun OnboardingLivePreviewCard(
     }
 
     val allPosters = if (previewItems.isNotEmpty()) previewItems else (ShowcaseRowTop + ShowcaseRowBottom)
-    val offsetIndex = selectedRegionPreset.hashCode().and(0x7FFFFFFF) % allPosters.size.coerceAtLeast(1)
-    val itemsToRender = remember(allPosters, offsetIndex) {
+    val itemsToRender = remember(allPosters) {
         if (allPosters.isEmpty()) emptyList()
-        else (allPosters.drop(offsetIndex) + allPosters.take(offsetIndex)).take(5)
+        else allPosters.take(5)
     }
 
     Box(
@@ -2056,7 +1742,7 @@ private fun OnboardingLivePreviewCard(
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
                         Text(
-                            text = "${getRegionCode(selectedRegionPreset)} · ${selectedRegionPreset.displayName}",
+                            text = "$scaleLabel · ${if (isAmoled) "AMOLED" else "Dark"}",
                             style = TextStyle(
                                 fontFamily = AppFontFamily,
                                 fontWeight = FontWeight.Medium,

@@ -100,16 +100,9 @@ fun MediaTypeBadge(
     modifier: Modifier = Modifier,
     isTvSerial: Boolean = false
 ) {
-    val activePreset = com.euthopiar.core.util.TmdbBridge.activeRegionPreset
     val label = when (type) {
         MediaType.MOVIE -> "MOVIE"
-        MediaType.TV_SERIES -> {
-            if (activePreset.isIndianRegion) {
-                if (isTvSerial) "TV SERIAL" else "WEB SERIES"
-            } else {
-                "SERIES"
-            }
-        }
+        MediaType.TV_SERIES -> "SERIES"
         MediaType.ANIME -> "ANIME"
         MediaType.LIVE_TV -> "LIVE"
         else -> type.name.replace("_", " ")

@@ -95,14 +95,12 @@ class HomeViewModel(
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val universalTopTen: StateFlow<List<MediaItem>> =
-        combine(_selectedTab, preferencesRepository.contentRegionPreset) { tab, preset ->
-            tab to preset
-        }.flatMapLatest { (tab, preset) ->
+        _selectedTab.flatMapLatest { tab ->
             val mediaType = when (tab) {
                 HomeFilterTab.TV_SHOWS, HomeFilterTab.ANIME -> com.euthopiar.core.model.MediaType.TV_SERIES
                 else -> com.euthopiar.core.model.MediaType.MOVIE
             }
-            topTenRepository.observeTopTen(mediaType, preset = preset)
+            topTenRepository.observeTopTen(mediaType)
         }.stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5000),
@@ -335,16 +333,14 @@ class HomeViewModel(
         viewModelScope.launch {
             combine(
                 repository.activePlugin,
-                preferencesRepository.contentRegionPreset,
                 preferencesRepository.catalogPreferences
-            ) { plugin, preset, _ ->
-                plugin.name to preset
-            }.collect { (pluginName, preset) ->
+            ) { plugin, _ ->
+                plugin.name
+            }.collect { pluginName ->
                 if (lastPluginName != pluginName) {
                     lastPluginName = pluginName
                     _selectedTab.value = HomeFilterTab.ALL
                 }
-                com.euthopiar.core.util.TmdbBridge.activeRegionPreset = preset
                 loadCatalog()
             }
         }
@@ -483,24 +479,15 @@ class HomeViewModel(
                 val combinedSeed = (providerHash * 37L) xor (sessionIdx * 10007L)
                 val providerRandom = kotlin.random.Random(combinedSeed)
 
-                // 3. Select hero candidates from the top regional/core rows so regional presets never get diluted by global progressive rails
-                val activePreset = com.euthopiar.core.util.TmdbBridge.activeRegionPreset
-                val pinnedCoreCount = when (activePreset) {
-                    com.euthopiar.core.model.ContentRegionPreset.GLOBAL -> 4
-                    com.euthopiar.core.model.ContentRegionPreset.SOUTH_INDIA_ALL -> 9
-                    else -> 5
-                }.coerceAtMost(rows.size)
+                // 3. Select hero candidates from the top core rows so they never get diluted by global progressive rails
+                val pinnedCoreCount = 4.coerceAtMost(rows.size)
 
                 val heroSourceRows = rows.take(pinnedCoreCount).ifEmpty { rows }
                 val rawCandidates = heroSourceRows.flatMap { it.items }
                     .filter { !it.backdropUrl.isNullOrBlank() || !it.posterUrl.isNullOrBlank() }
                     .distinctBy { it.id }
 
-                val candidates = if (activePreset.isIndianRegion) {
-                    rawCandidates.filterNot { com.euthopiar.core.util.TmdbBridge.isIndianTvSerial(it) }
-                } else {
-                    rawCandidates
-                }
+                val candidates = rawCandidates
 
                 val candidatesWithLogos = candidates.filter { !it.logoUrl.isNullOrBlank() }.shuffled(providerRandom)
                 val otherCandidates = candidates.filter { it.logoUrl.isNullOrBlank() }.shuffled(providerRandom)
@@ -526,11 +513,7 @@ class HomeViewModel(
                 }
 
                 // Prioritize items that have verified studio clear logos (up to 6 in carousel)
-                val heroCandidatesPool = if (activePreset.isIndianRegion) {
-                    resolvedHeroes.filterNot { com.euthopiar.core.util.TmdbBridge.isIndianTvSerial(it) }
-                } else {
-                    resolvedHeroes
-                }
+                val heroCandidatesPool = resolvedHeroes
                 val heroWithLogos = heroCandidatesPool.filter { !it.logoUrl.isNullOrBlank() }
                 val heroItems = if (heroWithLogos.size >= 4) {
                     heroWithLogos.take(6)
@@ -538,7 +521,7 @@ class HomeViewModel(
                     (heroWithLogos + heroCandidatesPool.filter { it.logoUrl.isNullOrBlank() }).take(6)
                 }
 
-                // 5. Keep regional/core rows pinned at the top; permute secondary discovery rows and rotate item offsets.
+                // 5. Keep core rows pinned at the top; permute secondary discovery rows and rotate item offsets.
                 // Stremio rows (catalogKey != null) keep the Catalog Manager order
                 // and are never shuffled, so Home reflects the saved row order.
                 val processedRows = if (rows.size > pinnedCoreCount) {

@@ -6,7 +6,6 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.euthopiar.core.addons.CatalogPreference
-import com.euthopiar.core.model.ContentRegionPreset
 import com.euthopiar.core.sync.supabase.SupabaseSession
 import com.euthopiar.ui.longpress.LongPressSheetStyle
 import kotlinx.coroutines.flow.Flow
@@ -97,7 +96,6 @@ class PreferencesRepository private constructor(private val context: Context) {
         val ACTIVE_PROVIDER = stringPreferencesKey("active_provider")
         val DISABLED_PLUGINS = stringSetPreferencesKey("disabled_plugins")
         val EXTRA_CONTENT_ENABLED = booleanPreferencesKey("extra_content_enabled")
-        val CONTENT_REGION_PRESET = stringPreferencesKey("content_region_preset")
         val CARD_SCALE_MODE = stringPreferencesKey("card_scale_mode")
         val NAVBAR_STYLE = stringPreferencesKey("navbar_style")
         val FIRST_RUN_COMPLETED = booleanPreferencesKey("first_run_completed")
@@ -292,21 +290,6 @@ class PreferencesRepository private constructor(private val context: Context) {
         .map { preferences ->
             preferences[PreferencesKeys.EXTRA_CONTENT_ENABLED] ?: false
         }
-
-    val contentRegionPreset: Flow<ContentRegionPreset> = context.preferencesDataStore.data
-        .catch { exception ->
-            if (exception is IOException) emit(emptyPreferences()) else throw exception
-        }
-        .map { preferences ->
-            ContentRegionPreset.fromId(preferences[PreferencesKeys.CONTENT_REGION_PRESET])
-        }
-        .distinctUntilChanged()
-
-    suspend fun setContentRegionPreset(preset: ContentRegionPreset) {
-        context.preferencesDataStore.edit { preferences ->
-            preferences[PreferencesKeys.CONTENT_REGION_PRESET] = preset.id
-        }
-    }
 
     val cardScaleMode: Flow<CardScaleMode> = context.preferencesDataStore.data
         .catch { exception ->
@@ -1405,7 +1388,6 @@ class PreferencesRepository private constructor(private val context: Context) {
         prefs[PreferencesKeys.TOP_10_STYLE]?.let { result["top_10_style"] = it }
         prefs[PreferencesKeys.SECTION_LABEL_STYLE]?.let { result["section_label_style"] = it }
         prefs[PreferencesKeys.LONG_PRESS_STYLE]?.let { result["long_press_style"] = it }
-        prefs[PreferencesKeys.CONTENT_REGION_PRESET]?.let { result["content_region_preset"] = it }
         prefs[PreferencesKeys.AMOLED_MODE]?.let { result["amoled_mode"] = it.toString() }
         prefs[PreferencesKeys.DEFAULT_QUALITY]?.let { result["default_quality"] = it }
         prefs[PreferencesKeys.AUTO_PLAY_NEXT_EPISODE]?.let { result["auto_play_next_episode"] = it.toString() }
@@ -1447,10 +1429,6 @@ class PreferencesRepository private constructor(private val context: Context) {
             settings["top_10_style"]?.let { prefs[PreferencesKeys.TOP_10_STYLE] = it }
             settings["section_label_style"]?.let { prefs[PreferencesKeys.SECTION_LABEL_STYLE] = it }
             settings["long_press_style"]?.let { prefs[PreferencesKeys.LONG_PRESS_STYLE] = it }
-            settings["content_region_preset"]?.let { presetId ->
-                prefs[PreferencesKeys.CONTENT_REGION_PRESET] = presetId
-                com.euthopiar.core.util.TmdbBridge.activeRegionPreset = ContentRegionPreset.fromId(presetId)
-            }
             settings["amoled_mode"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.AMOLED_MODE] = it }
             settings["default_quality"]?.let { prefs[PreferencesKeys.DEFAULT_QUALITY] = it }
             settings["auto_play_next_episode"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.AUTO_PLAY_NEXT_EPISODE] = it }

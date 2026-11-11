@@ -3,7 +3,6 @@ package com.euthopiar.ui.settings.pages
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.euthopiar.core.model.ContentRegionPreset
 import com.euthopiar.data.preferences.*
 import com.euthopiar.ui.longpress.LongPressSheetStyle
 import kotlinx.coroutines.flow.SharingStarted
@@ -14,9 +13,6 @@ import kotlinx.coroutines.launch
 class AppearanceSettingsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val prefs = PreferencesRepository.getInstance(application)
-
-    private val _contentRegionPreset = kotlinx.coroutines.flow.MutableStateFlow(ContentRegionPreset.GLOBAL)
-    val contentRegionPreset: StateFlow<ContentRegionPreset> = _contentRegionPreset
 
     private val _cardScaleMode = kotlinx.coroutines.flow.MutableStateFlow(CardScaleMode.FLAGSHIP)
     val cardScaleMode: StateFlow<CardScaleMode> = _cardScaleMode
@@ -41,9 +37,6 @@ class AppearanceSettingsViewModel(application: Application) : AndroidViewModel(a
 
     init {
         viewModelScope.launch {
-            prefs.contentRegionPreset.collect { _contentRegionPreset.value = it }
-        }
-        viewModelScope.launch {
             prefs.cardScaleMode.collect { _cardScaleMode.value = it }
         }
         viewModelScope.launch {
@@ -64,11 +57,6 @@ class AppearanceSettingsViewModel(application: Application) : AndroidViewModel(a
         viewModelScope.launch {
             prefs.amoledMode.collect { _amoledMode.value = it }
         }
-    }
-
-    fun setContentRegionPreset(preset: ContentRegionPreset) {
-        _contentRegionPreset.value = preset
-        viewModelScope.launch { prefs.setContentRegionPreset(preset) }
     }
 
     fun setCardScaleMode(mode: CardScaleMode) {
@@ -107,7 +95,6 @@ class AppearanceSettingsViewModel(application: Application) : AndroidViewModel(a
     }
 
     fun resetDefaults() {
-        setContentRegionPreset(ContentRegionPreset.GLOBAL)
         setNavbarStyle(NavbarStyle.FLOATING)
         setCardScaleMode(CardScaleMode.FLAGSHIP)
         setSectionLabelStyle(SectionLabelStyle.AccentBar)

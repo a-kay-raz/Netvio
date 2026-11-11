@@ -6,8 +6,6 @@ import androidx.datastore.preferences.core.*
 import com.euthopiar.app.plugin.PluginRepositoryService
 import com.euthopiar.core.addons.AddonRepository
 import com.euthopiar.core.addons.ManagedAddon
-import com.euthopiar.core.model.ContentRegionPreset
-import com.euthopiar.core.util.TmdbBridge
 import com.euthopiar.data.local.AppDatabase
 import com.euthopiar.data.local.PlaybackHistoryEntity
 import com.euthopiar.data.local.WatchlistEntity
@@ -59,10 +57,9 @@ data class BackupInspectionResult(
  *    Per-profile Search Histories, User Playlists, Saved Watchlist, and Playback History / Continue Watching.
  * 2. Type-Safe Preferences Coercion: Enforces strict data types matching PreferencesRepository keys
  *    to prevent DataStore ClassCastException.
- * 3. Region Synchronization: Restores selected ContentRegionPreset and immediately updates TmdbBridge.
- * 4. Stream Safety: Mode "wt" prevents trailing garbage overwrite corruption.
- * 5. Memory Boundedness: Enforces 15MB file cap to prevent OOM vulnerabilities while supporting extensive libraries.
- * 6. Module Synchronization: Coordinates DataStore, SharedPreferences fallback, ProfileManager,
+ * 3. Stream Safety: Mode "wt" prevents trailing garbage overwrite corruption.
+ * 4. Memory Boundedness: Enforces 15MB file cap to prevent OOM vulnerabilities while supporting extensive libraries.
+ * 5. Module Synchronization: Coordinates DataStore, SharedPreferences fallback, ProfileManager,
  *    AddonRepository, PlaylistRepository, Room Database, and background plugin sync.
  */
 class ConfigurationBackupManager(private val context: Context) {
@@ -81,7 +78,6 @@ class ConfigurationBackupManager(private val context: Context) {
             "subtitle_color" to KeyType.STRING,
             "custom_download_dir" to KeyType.STRING,
             "active_provider" to KeyType.STRING,
-            "content_region_preset" to KeyType.STRING,
             "card_scale_mode" to KeyType.STRING,
             "navbar_style" to KeyType.STRING,
             "recent_searches_csv" to KeyType.STRING,
@@ -404,7 +400,6 @@ class ConfigurationBackupManager(private val context: Context) {
      * - Restores Saved Watchlist items to Room Database.
      * - Restores Playback History & Continue Watching to Room Database.
      * - Restores Stremio Addons to AddonRepository.
-     * - Synchronizes ContentRegionPreset in TmdbBridge.
      * - Syncs SharedPreferences fallback.
      * - Triggers background repository plugin installation.
      */
@@ -427,6 +422,8 @@ class ConfigurationBackupManager(private val context: Context) {
                     while (keys.hasNext()) {
                         val keyName = keys.next()
                         if (isSensitiveKey(keyName)) continue
+                        // The region preset was removed: ignore it in old backups so restore keeps working.
+                        if (keyName == "content_region_preset") continue
 
                         val rawValue = jsonPrefs.get(keyName)
                         val schemaType = PREFERENCES_SCHEMA[keyName]
@@ -610,15 +607,7 @@ class ConfigurationBackupManager(private val context: Context) {
                 }
             }
 
-            // 10. Synchronize Content Region Preset in TmdbBridge
-            val restoredPresetId = jsonPrefs?.optString("content_region_preset", "")
-            if (!restoredPresetId.isNullOrBlank()) {
-                val preset = ContentRegionPreset.fromId(restoredPresetId)
-                TmdbBridge.activeRegionPreset = preset
-                TmdbBridge.clearHomeCatalogCache()
-            }
-
-            // 11. Trigger Supabase Safe Sync Replication if authenticated
+            // 10. Trigger Supabase Safe Sync Replication if authenticated
             try {
                 com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(context).syncAll(forceFull = true)
             } catch (_: Exception) {}
