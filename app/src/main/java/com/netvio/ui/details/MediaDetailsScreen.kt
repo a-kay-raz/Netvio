@@ -184,6 +184,7 @@ import com.netvio.ui.components.LocalSnackbarController
 import com.netvio.ui.components.ContentRatingBadge
 import com.netvio.ui.components.ErrorState
 import com.netvio.ui.components.MetaLine
+import com.netvio.ui.components.NuvioLoadingIndicator
 import com.netvio.ui.components.PosterCard
 import com.netvio.ui.components.PrimaryButton
 import com.netvio.ui.components.ProgressBarThin
@@ -410,20 +411,29 @@ fun MediaDetailsScreen(
                     val shellTitle = state.title ?: initialTitle ?: ""
                     val shellPoster = state.posterUrl ?: initialPosterUrl
                     val shellLogo = state.logoUrl ?: initialLogoUrl
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        DetailsBackdropHero(
-                            backdropUrl = shellPoster,
-                            logoUrl = shellLogo,
-                            title = shellTitle
-                        )
-                        DetailsTitleHeader(
-                            title = shellTitle,
-                            logoUrl = shellLogo,
-                            modifier = Modifier.padding(
-                                horizontal = Dimens.spacing16,
-                                vertical = Dimens.spacing16
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            DetailsBackdropHero(
+                                backdropUrl = shellPoster,
+                                logoUrl = shellLogo,
+                                title = shellTitle
                             )
-                        )
+                            DetailsTitleHeader(
+                                title = shellTitle,
+                                logoUrl = shellLogo,
+                                modifier = Modifier.padding(
+                                    horizontal = Dimens.spacing16,
+                                    vertical = Dimens.spacing16
+                                )
+                            )
+                        }
+                        // Spinner on the shell while the fetch runs.
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            NuvioLoadingIndicator()
+                        }
                     }
                 }
 
