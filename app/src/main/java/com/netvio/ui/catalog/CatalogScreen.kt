@@ -43,6 +43,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.netvio.core.model.MediaItem
 import com.netvio.core.model.MediaType
 import com.netvio.core.repository.ProviderRepository
+import com.netvio.ui.components.NuvioLoadingIndicator
 import com.netvio.ui.components.PosterCard
 import com.netvio.ui.theme.AppTypography
 import com.netvio.ui.theme.Dimens
@@ -225,7 +226,8 @@ fun CatalogScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator(color = TextPrimary)
+                    // Same ported Nuvio loading screen as the details page.
+                    NuvioLoadingIndicator()
                 }
             }
             uiState.loadFailed -> {
