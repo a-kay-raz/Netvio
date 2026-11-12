@@ -184,7 +184,6 @@ import com.netvio.ui.components.LocalSnackbarController
 import com.netvio.ui.components.ContentRatingBadge
 import com.netvio.ui.components.ErrorState
 import com.netvio.ui.components.MetaLine
-import com.netvio.ui.components.NuvioLoadingIndicator
 import com.netvio.ui.components.PosterCard
 import com.netvio.ui.components.PrimaryButton
 import com.netvio.ui.components.ProgressBarThin
@@ -199,7 +198,6 @@ import com.netvio.ui.theme.Dimens
 import com.netvio.ui.theme.Error
 import com.netvio.ui.theme.GlassDefaults
 import com.netvio.ui.theme.HairlineWidth
-import com.netvio.ui.theme.Motion
 import com.netvio.ui.theme.Outline
 import com.netvio.ui.theme.ShapeFull
 import com.netvio.ui.theme.ShapeM
@@ -395,22 +393,37 @@ fun MediaDetailsScreen(
             Crossfade(
                 targetState = uiState,
                 animationSpec = tween(
-                    durationMillis = Motion.DurationEmphasized,
+                    // Faster reveal than the shared emphasized duration: the
+                    // shell is already showing, so the full page should
+                    // appear quickly once the fetch returns.
+                    durationMillis = 180,
                     easing = FastOutSlowInEasing
                 ),
                 label = "MediaDetailsTransition"
             ) { state ->
             when (state) {
-                // Official-app loading screen, exactly like Nuvio: a centered
-                // animated spinner on a plain background (NuvioLoadingIndicator).
-                // No poster/logo shell while loading — the full details page
-                // appears at once when the fetch returns.
+                // Netvio shell: the details page shell (hero + title from the
+                // navigation args) renders immediately, so a poster tap slides
+                // straight into the details page with no black flash in
+                // between. The rest fills in when the fetch returns.
                 is MediaDetailsUiState.Loading -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        NuvioLoadingIndicator()
+                    val shellTitle = state.title ?: initialTitle ?: ""
+                    val shellPoster = state.posterUrl ?: initialPosterUrl
+                    val shellLogo = state.logoUrl ?: initialLogoUrl
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        DetailsBackdropHero(
+                            backdropUrl = shellPoster,
+                            logoUrl = shellLogo,
+                            title = shellTitle
+                        )
+                        DetailsTitleHeader(
+                            title = shellTitle,
+                            logoUrl = shellLogo,
+                            modifier = Modifier.padding(
+                                horizontal = Dimens.spacing16,
+                                vertical = Dimens.spacing16
+                            )
+                        )
                     }
                 }
 
