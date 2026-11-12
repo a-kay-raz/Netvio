@@ -22,10 +22,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -112,7 +114,13 @@ fun LinkSelectionSheet(
     val e = effectiveEpisode?.episodeNumber
     val mediaType = if (detail.type == MediaType.TV_SERIES || detail.type == MediaType.ANIME) "tv" else "movie"
 
+    // True while the IMDb id is being resolved, before StreamsRepository.load has
+    // started (and set isAnyLoading). Without this the sheet shows "No streams
+    // found" for that window, even though nothing has been searched yet.
+    var isResolvingImdb by remember { mutableStateOf(true) }
+
     LaunchedEffect(detail.id, s, e) {
+        isResolvingImdb = true
         val detailImdb = detail.imdbId
         val resolvedImdb = if (!detailImdb.isNullOrBlank() && detailImdb.startsWith("tt")) {
             detailImdb
@@ -124,6 +132,7 @@ fun LinkSelectionSheet(
                 )
             }
         }
+        isResolvingImdb = false
         StreamsRepository.load(
             type = mediaType,
             videoId = detail.id,
@@ -230,7 +239,7 @@ fun LinkSelectionSheet(
         LinkSelectionContent(
             title = subtitleText,
             groups = groups,
-            isLoading = streamsUiState.isAnyLoading && !hasStreams,
+            isLoading = (isResolvingImdb || streamsUiState.isAnyLoading) && !hasStreams,
             isAnyLoading = streamsUiState.isAnyLoading,
             isError = streamsUiState.emptyStateReason == StreamsEmptyStateReason.StreamFetchFailed && !hasStreams,
             emptyReason = streamsUiState.emptyStateReason,
@@ -332,18 +341,52 @@ fun LinkSelectionContent(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            Text(
-                text = "Choose Stream",
-                style = TextStyle(
-                    fontFamily = AppFontFamily,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 30.sp,
-                    lineHeight = 30.sp,
-                    letterSpacing = (-0.04).em,
-                    color = DownloadTokens.textPrimary
-                ),
-                modifier = Modifier.semantics { heading() }
-            )
+            // Line 2: "Choose Stream" heading + a refresh icon that refetches
+            // streams from the addons (force refresh). While a fetch is in
+            // progress the icon becomes a small spinner.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Choose Stream",
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 30.sp,
+                        lineHeight = 30.sp,
+                        letterSpacing = (-0.04).em,
+                        color = DownloadTokens.textPrimary
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { heading() }
+                )
+                if (isAnyLoading) {
+                    Box(
+                        modifier = Modifier.size(40.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(22.dp),
+                            strokeWidth = 2.dp,
+                            color = DownloadTokens.textMuted
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = onRetry,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Refresh,
+                            contentDescription = "Refresh streams",
+                            modifier = Modifier.size(22.dp),
+                            tint = DownloadTokens.textPrimary
+                        )
+                    }
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(14.dp))
