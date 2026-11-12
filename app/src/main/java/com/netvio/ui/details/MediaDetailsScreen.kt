@@ -20,6 +20,10 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.EaseInOutCubic
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.ui.text.style.TextAlign
 import kotlinx.coroutines.delay
 import androidx.compose.animation.fadeIn
@@ -176,6 +180,7 @@ import com.netvio.core.model.MediaDetail
 import com.netvio.core.model.MediaItem
 import com.netvio.core.model.MediaType
 import com.netvio.core.streams.StreamItem
+import com.netvio.core.util.TmdbBridge
 import com.netvio.ui.details.sheets.LinkSelectionSheet
 import com.netvio.data.local.PlaybackHistoryEntity
 import com.netvio.ui.components.AppAsyncImage
@@ -184,7 +189,6 @@ import com.netvio.ui.components.LocalSnackbarController
 import com.netvio.ui.components.ContentRatingBadge
 import com.netvio.ui.components.ErrorState
 import com.netvio.ui.components.MetaLine
-import com.netvio.ui.components.NuvioLoadingIndicator
 import com.netvio.ui.components.PosterCard
 import com.netvio.ui.components.PrimaryButton
 import com.netvio.ui.components.ProgressBarThin
@@ -199,6 +203,7 @@ import com.netvio.ui.theme.Dimens
 import com.netvio.ui.theme.Error
 import com.netvio.ui.theme.GlassDefaults
 import com.netvio.ui.theme.HairlineWidth
+import com.netvio.ui.theme.Motion
 import com.netvio.ui.theme.Outline
 import com.netvio.ui.theme.ShapeFull
 import com.netvio.ui.theme.ShapeM
@@ -394,47 +399,29 @@ fun MediaDetailsScreen(
             Crossfade(
                 targetState = uiState,
                 animationSpec = tween(
-                    // Faster reveal than the shared emphasized duration: the
-                    // shell is already showing, so the full page should
-                    // appear quickly once the fetch returns.
-                    durationMillis = 180,
+                    durationMillis = Motion.DurationEmphasized,
                     easing = FastOutSlowInEasing
                 ),
                 label = "MediaDetailsTransition"
             ) { state ->
             when (state) {
-                // Netvio shell: the details page shell (hero + title from the
-                // navigation args) renders immediately, so a poster tap slides
-                // straight into the details page with no black flash in
-                // between. The rest fills in when the fetch returns.
+                // Euthopiar's loading screen, exactly as in the upstream repo
+                // we forked from: a dimmed poster backdrop with a gradient
+                // scrim, and the show logo breathing gently in the center.
+                // No spinner, no back button, no text while loading.
                 is MediaDetailsUiState.Loading -> {
-                    val shellTitle = state.title ?: initialTitle ?: ""
-                    val shellPoster = state.posterUrl ?: initialPosterUrl
-                    val shellLogo = state.logoUrl ?: initialLogoUrl
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            DetailsBackdropHero(
-                                backdropUrl = shellPoster,
-                                logoUrl = shellLogo,
-                                title = shellTitle
-                            )
-                            DetailsTitleHeader(
-                                title = shellTitle,
-                                logoUrl = shellLogo,
-                                modifier = Modifier.padding(
-                                    horizontal = Dimens.spacing16,
-                                    vertical = Dimens.spacing16
-                                )
-                            )
-                        }
-                        // Spinner on the shell while the fetch runs.
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            NuvioLoadingIndicator()
-                        }
-                    }
+                    val resolvedLogo = state.logoUrl
+                        ?: initialLogoUrl
+                        ?: TmdbBridge.getCachedLogo(
+                            mediaId,
+                            parsedType == MediaType.TV_SERIES || parsedType == MediaType.ANIME
+                        )
+                    MediaDetailsLoadingView(
+                        title = state.title ?: initialTitle,
+                        posterUrl = state.posterUrl ?: initialPosterUrl,
+                        logoUrl = resolvedLogo,
+                        screenBg = screenBg
+                    )
                 }
 
                 is MediaDetailsUiState.Error -> {
@@ -1969,6 +1956,126 @@ private fun DetailsBackdropHero(
                 isMuted = isMuted,
                 onToggle = onToggleMute
             )
+        }
+    }
+}
+
+/**
+ * Euthopiar's details loading screen, exactly as in the upstream repo
+ * Netvio was forked from (TheARCreactorGUY/Euthopiar): a dimmed poster
+ * backdrop with a vertical gradient scrim, and the show logo breathing
+ * gently in the center (1400ms alpha + scale). No spinner, no back
+ * button, no text while loading; empty if the logo is not available.
+ */
+@Composable
+private fun MediaDetailsLoadingView(
+    title: String?,
+    posterUrl: String?,
+    logoUrl: String?,
+    screenBg: Color,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val cleanTitle = remember(title) { title?.let { sanitizeTitle(it) }.orEmpty() }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "LoadingBreathe")
+    val breatheAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.82f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1400, easing = EaseInOutCubic),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "BreatheAlpha"
+    )
+    val breatheScale by infiniteTransition.animateFloat(
+        initialValue = 0.985f,
+        targetValue = 1.015f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1400, easing = EaseInOutCubic),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "BreatheScale"
+    )
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(screenBg),
+        contentAlignment = Alignment.Center
+    ) {
+        // 1. Atmospheric Ambient Backdrop (Dimmed & Scrimmed)
+        if (!posterUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(posterUrl)
+                    .crossfade(250)
+                    .build(),
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = 0.16f },
+                contentScale = ContentScale.Crop
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                screenBg.copy(alpha = 0.82f),
+                                screenBg.copy(alpha = 0.94f),
+                                screenBg
+                            )
+                        )
+                    )
+            )
+        }
+
+        // 2. Optical Center Breathing Content Custom Logo (NO back button on loading screen)
+        var isLogoFailed by remember(logoUrl) { mutableStateOf(false) }
+
+        Box(
+            modifier = Modifier
+                .padding(horizontal = 32.dp)
+                .graphicsLayer {
+                    scaleX = breatheScale
+                    scaleY = breatheScale
+                    alpha = breatheAlpha
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            // Keep empty while logo resolves (no text flicker). Only render when logo is present.
+            if (!logoUrl.isNullOrBlank() && !isLogoFailed) {
+                // Soft radial ambient backlight (Peter Bakaus color science)
+                Box(
+                    modifier = Modifier
+                        .size(width = 300.dp, height = 130.dp)
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = 0.04f),
+                                    Color.Transparent
+                                )
+                            )
+                        )
+                )
+
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(logoUrl)
+                        .crossfade(260)
+                        .transformations(TrimTransparentTransformation())
+                        .build(),
+                    contentDescription = cleanTitle,
+                    onError = { isLogoFailed = true },
+                    modifier = Modifier
+                        .heightIn(min = 40.dp, max = 76.dp)
+                        .widthIn(max = 260.dp),
+                    contentScale = ContentScale.Fit,
+                    alignment = Alignment.Center
+                )
+            }
         }
     }
 }
