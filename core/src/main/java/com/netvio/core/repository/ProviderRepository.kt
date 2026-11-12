@@ -200,7 +200,7 @@ open class ProviderRepository(
         }
         val items = row?.items ?: emptyList()
         // TMDB pages hold 20 items; a full page means there is likely another.
-        CatalogPage(items, items.size >= 20)
+        return CatalogPage(items, items.size >= 20)
     }
 
     private suspend fun getStremioCatalogPage(catalogKey: String, page: Int): CatalogPage {
@@ -227,7 +227,7 @@ open class ProviderRepository(
         } catch (_: Exception) {
             emptyList()
         }
-        CatalogPage(items, def.supportsPagination && items.size >= pageSize)
+        return CatalogPage(items, def.supportsPagination && items.size >= pageSize)
     }
 
     private suspend fun fetchStremioCatalogRails(offset: Int, limit: Int): List<CatalogRow> = withContext(Dispatchers.IO) {
