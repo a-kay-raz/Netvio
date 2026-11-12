@@ -156,6 +156,80 @@ open class ProviderRepository(
         applyCatalogPreferences(stremioRails, preferences)
     }
 
+    /**
+     * One page of a full catalog, for the Catalog (View all) screen — the
+     * Nuvio-style expanded catalog. A TMDB key ("tmdb:<slug>") pages one
+     * TMDB feed; any other key is a Stremio addon catalog
+     * ("<manifestId>:<type>:<catalogId>") paged with skip when the addon
+     * declares it. Page numbers start at 1. [CatalogPage.hasMore] is a
+     * best-effort signal: a full page means there is likely another one,
+     * and an empty page always ends pagination.
+     */
+    data class CatalogPage(
+        val items: List<MediaItem>,
+        val hasMore: Boolean
+    )
+
+    suspend fun getCatalogPage(catalogKey: String, page: Int): CatalogPage = withContext(Dispatchers.IO) {
+        val safePage = page.coerceAtLeast(1)
+        if (catalogKey.startsWith("tmdb:")) {
+            getTmdbCatalogPage(catalogKey, safePage)
+        } else {
+            getStremioCatalogPage(catalogKey, safePage)
+        }
+    }
+
+    private suspend fun getTmdbCatalogPage(catalogKey: String, page: Int): CatalogPage {
+        val feed = TmdbBridge.buildIndianCoreFeeds(TmdbBridge.DEFAULT_API_KEY)
+            .firstOrNull { TmdbBridge.tmdbCatalogKey(it.title) == catalogKey }
+            ?: return CatalogPage(emptyList(), false)
+        val pagedUrl = feed.url + "&page=$page"
+        val row = try {
+            TmdbBridge.fetchCatalogRow(
+                client = DohDns.metadataClient,
+                title = feed.title,
+                url = pagedUrl,
+                providerName = "tmdb",
+                resolveLogos = false,
+                eyebrow = feed.eyebrow,
+                subtitle = feed.subtitle,
+                catalogKey = catalogKey
+            )
+        } catch (_: Exception) {
+            null
+        }
+        val items = row?.items ?: emptyList()
+        // TMDB pages hold 20 items; a full page means there is likely another.
+        CatalogPage(items, items.size >= 20)
+    }
+
+    private suspend fun getStremioCatalogPage(catalogKey: String, page: Int): CatalogPage {
+        val def = try {
+            getCatalogDefinitions().firstOrNull { it.key == catalogKey }
+        } catch (_: Exception) {
+            null
+        } ?: return CatalogPage(emptyList(), false)
+        if (page > 1 && !def.supportsPagination) return CatalogPage(emptyList(), false)
+        val pageSize = 50
+        val skip = if (def.supportsPagination) (page - 1) * pageSize else null
+        val items = try {
+            withTimeoutOrNull(10_000L) {
+                val url = def.buildCatalogUrl(skip = skip)
+                val response = com.netvio.core.js.network.httpRequestRaw("GET", url, emptyMap(), "", followRedirects = true)
+                if (response.status in 200..299 && response.body.isNotBlank()) {
+                    com.netvio.core.addons.HomeCatalogParser.parseCatalog(
+                        payload = response.body,
+                        addonName = def.addonName,
+                        maxItems = pageSize
+                    )
+                } else emptyList()
+            } ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        CatalogPage(items, def.supportsPagination && items.size >= pageSize)
+    }
+
     private suspend fun fetchStremioCatalogRails(offset: Int, limit: Int): List<CatalogRow> = withContext(Dispatchers.IO) {
         val readyAddons = readyEnabledAddons()
         if (readyAddons.isEmpty()) return@withContext emptyList()

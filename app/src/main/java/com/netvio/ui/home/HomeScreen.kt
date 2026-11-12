@@ -100,6 +100,7 @@ fun HomeScreen(
     onContinueWatchingClick: ((com.netvio.data.local.PlaybackHistoryEntity) -> Unit)? = null,
     onPlayHero: ((MediaItem, com.netvio.data.local.PlaybackHistoryEntity?) -> Unit)? = null,
     onNavigateToPluginManager: (() -> Unit)? = null,
+    onCatalogClick: ((catalogKey: String, title: String, subtitle: String?) -> Unit)? = null,
     viewModel: HomeViewModel = viewModel(),
     registry: PluginRegistry = PluginRegistry.Default,
     modifier: Modifier = Modifier
@@ -577,11 +578,20 @@ fun HomeScreen(
                                             )
                                         )
                                     } else {
+                                        // Nuvio-style View all: only when the catalog
+                                        // likely holds more than this preview strip
+                                        // (rows are fetched at a 20-item cap).
+                                        val catalogKey = row.catalogKey
                                         ContentRow(
                                             row = row,
                                             sectionLabelStyle = sectionLabelStyle,
                                             onItemClick = { onMediaClick(it) },
                                             onItemLongClick = { quickActionItem = it },
+                                            onSeeAllClick = if (catalogKey != null && row.items.size >= 20) {
+                                                onCatalogClick?.let { cb ->
+                                                    { cb(catalogKey, row.title, row.subtitle) }
+                                                }
+                                            } else null,
                                             modifier = Modifier.staggeredEntrance(
                                                 tabKey = selectedTab,
                                                 rowIndex = stagger,

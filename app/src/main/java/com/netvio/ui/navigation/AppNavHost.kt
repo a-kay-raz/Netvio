@@ -34,6 +34,7 @@ import androidx.lifecycle.Lifecycle
 import android.os.SystemClock
 import com.netvio.core.model.MediaItem
 import com.netvio.core.registry.PluginRegistry
+import com.netvio.ui.catalog.CatalogScreen
 import com.netvio.ui.details.MediaDetailsScreen
 import com.netvio.ui.home.HomeScreen
 import com.netvio.ui.player.PlayerScreen
@@ -451,6 +452,15 @@ fun AppNavHost(
                     },
                     onNavigateToPluginManager = {
                         navController.navigateSafely("settings/plugins")
+                    },
+                    onCatalogClick = { catalogKey, title, subtitle ->
+                        navController.navigateSafely(
+                            buildCatalogRoute(
+                                catalogKey = catalogKey,
+                                title = title,
+                                subtitle = subtitle
+                            )
+                        )
                     }
                 )
             }
@@ -693,6 +703,92 @@ fun AppNavHost(
                         }
                     },
                     onNavigateToPluginManager = { navController.navigateSafely("settings/plugins") }
+                )
+            }
+
+            composable(
+                route = "catalog/{key}?title={title}&subtitle={subtitle}",
+                arguments = listOf(
+                    navArgument("key") { type = NavType.StringType },
+                    navArgument("title") { type = NavType.StringType; nullable = true; defaultValue = null },
+                    navArgument("subtitle") { type = NavType.StringType; nullable = true; defaultValue = null }
+                ),
+                enterTransition = {
+                    if (reduceMotion) {
+                        fadeIn(animationSpec = tween(180))
+                    } else {
+                        slideInHorizontally(
+                            initialOffsetX = { it },
+                            animationSpec = tween(280, easing = FastOutSlowInEasing)
+                        ) + fadeIn(animationSpec = tween(200))
+                    }
+                },
+                exitTransition = {
+                    if (reduceMotion) {
+                        fadeOut(animationSpec = tween(180))
+                    } else {
+                        slideOutHorizontally(
+                            targetOffsetX = { -it / 4 },
+                            animationSpec = tween(280, easing = FastOutSlowInEasing)
+                        ) + fadeOut(animationSpec = tween(200))
+                    }
+                },
+                popEnterTransition = {
+                    if (reduceMotion) {
+                        fadeIn(animationSpec = tween(180))
+                    } else {
+                        slideInHorizontally(
+                            initialOffsetX = { -it / 4 },
+                            animationSpec = tween(250, easing = FastOutSlowInEasing)
+                        ) + fadeIn(animationSpec = tween(200))
+                    }
+                },
+                popExitTransition = {
+                    if (reduceMotion) {
+                        fadeOut(animationSpec = tween(180))
+                    } else {
+                        slideOutHorizontally(
+                            targetOffsetX = { it },
+                            animationSpec = tween(250, easing = FastOutSlowInEasing)
+                        ) + fadeOut(animationSpec = tween(200))
+                    }
+                }
+            ) { backStackEntry ->
+                val rawKey = backStackEntry.arguments?.getString("key") ?: return@composable
+                val catalogKey = safeDecode(rawKey)
+                // Query args are percent-decoded once by Navigation, matching
+                // the single rfc3986Encode applied in buildCatalogRoute.
+                val title = backStackEntry.arguments?.getString("title")?.takeIf { it.isNotBlank() } ?: catalogKey
+                val subtitle = backStackEntry.arguments?.getString("subtitle")?.takeIf { it.isNotBlank() }
+                CatalogScreen(
+                    catalogKey = catalogKey,
+                    title = title,
+                    subtitle = subtitle,
+                    onBack = {
+                        val currentEntry = navController.currentBackStackEntry
+                        if (currentEntry != null && currentEntry.lifecycle.currentState != Lifecycle.State.RESUMED) {
+                            return@CatalogScreen
+                        }
+                        if (!navController.popBackStack()) {
+                            navController.navigateSafely("home") {
+                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        }
+                    },
+                    onMediaClick = { item: MediaItem ->
+                        navController.navigateSafely(
+                            buildDetailsRoute(
+                                mediaId = item.id,
+                                provider = item.provider,
+                                type = item.type.name,
+                                title = item.title,
+                                posterUrl = item.posterUrl ?: item.backdropUrl,
+                                logoUrl = item.logoUrl
+                            )
+                        )
+                    }
                 )
             }
 
@@ -1336,6 +1432,18 @@ internal fun buildDetailsRoute(
     val posterQuery = if (!posterUrl.isNullOrBlank()) "&posterUrl=${rfc3986Encode(posterUrl)}" else ""
     val logoQuery = if (!logoUrl.isNullOrBlank()) "&logoUrl=${rfc3986Encode(logoUrl)}" else ""
     return "details/$encodedId?provider=$encodedProv&type=$typeStr&depth=$depth&title=$encodedTitle$posterQuery$logoQuery"
+}
+
+internal fun buildCatalogRoute(
+    catalogKey: String,
+    title: String? = null,
+    subtitle: String? = null
+): String {
+    val safeKey = catalogKey.trim().ifBlank { "unknown" }
+    val encodedKey = safeDoubleEncode(safeKey)
+    val encodedTitle = title?.let { rfc3986Encode(it) } ?: ""
+    val subtitleQuery = if (!subtitle.isNullOrBlank()) "&subtitle=${rfc3986Encode(subtitle)}" else ""
+    return "catalog/$encodedKey?title=$encodedTitle$subtitleQuery"
 }
 
 internal fun buildPlayerRoute(
