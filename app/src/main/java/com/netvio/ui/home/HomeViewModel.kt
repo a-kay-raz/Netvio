@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import coil3.imageLoader
 import coil3.request.ImageRequest
+import com.netvio.core.addons.AddonRepository
 import com.netvio.core.model.CatalogRow
 import com.netvio.core.model.MediaItem
 import com.netvio.core.repository.ProviderRepository
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -69,6 +71,7 @@ class HomeViewModel(
     private val libraryRepository = LibraryRepository.getInstance(application)
     private val topTenRepository = com.netvio.data.repository.TopTenRepository.getInstance(application)
     private val preferencesRepository = com.netvio.data.preferences.PreferencesRepository.getInstance(application)
+    private val addonRepository = AddonRepository.getInstance(application)
     private val _pendingRemovalContinueWatchingIds = MutableStateFlow<Set<String>>(emptySet())
     private val _pendingClearContinueWatching = MutableStateFlow(false)
 
@@ -331,10 +334,25 @@ class HomeViewModel(
     init {
         var lastPluginName: String? = null
         viewModelScope.launch {
+            // Home reloads when the active plugin changes, when the saved
+            // catalog preferences change, AND when the installed addon set
+            // changes (add / remove / enable / disable). Without the addon
+            // set, removing an addon never reloaded Home: the prefs cleanup
+            // is a no-op when that addon had no saved preferences, so the
+            // removed addon's rails stayed on screen until a manual refresh.
+            // The key only covers manifestUrl + enabled, so a manifest
+            // content refresh does not trigger a reload.
             combine(
                 repository.activePlugin,
-                preferencesRepository.catalogPreferences
-            ) { plugin, _ ->
+                preferencesRepository.catalogPreferences,
+                addonRepository.uiState
+                    .map { state ->
+                        state.addons
+                            .sortedBy { it.manifestUrl }
+                            .joinToString(",") { "${it.manifestUrl}:${it.enabled}" }
+                    }
+                    .distinctUntilChanged()
+            ) { plugin, _, _ ->
                 plugin.name
             }.collect { pluginName ->
                 if (lastPluginName != pluginName) {
