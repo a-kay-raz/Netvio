@@ -184,6 +184,7 @@ import com.netvio.ui.components.LocalSnackbarController
 import com.netvio.ui.components.ContentRatingBadge
 import com.netvio.ui.components.ErrorState
 import com.netvio.ui.components.MetaLine
+import com.netvio.ui.components.NuvioLoadingIndicator
 import com.netvio.ui.components.PosterCard
 import com.netvio.ui.components.PrimaryButton
 import com.netvio.ui.components.ProgressBarThin
@@ -400,28 +401,16 @@ fun MediaDetailsScreen(
                 label = "MediaDetailsTransition"
             ) { state ->
             when (state) {
-                // No loading screen: the details page shell (hero + title from
-                // the navigation args) renders immediately, so a poster tap
-                // slides straight into the details page with no black flash
-                // in between. The rest fills in when the fetch returns.
+                // Official-app loading screen, exactly like Nuvio: a centered
+                // animated spinner on a plain background (NuvioLoadingIndicator).
+                // No poster/logo shell while loading — the full details page
+                // appears at once when the fetch returns.
                 is MediaDetailsUiState.Loading -> {
-                    val shellTitle = state.title ?: initialTitle ?: ""
-                    val shellPoster = state.posterUrl ?: initialPosterUrl
-                    val shellLogo = state.logoUrl ?: initialLogoUrl
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        DetailsBackdropHero(
-                            backdropUrl = shellPoster,
-                            logoUrl = shellLogo,
-                            title = shellTitle
-                        )
-                        DetailsTitleHeader(
-                            title = shellTitle,
-                            logoUrl = shellLogo,
-                            modifier = Modifier.padding(
-                                horizontal = Dimens.spacing16,
-                                vertical = Dimens.spacing16
-                            )
-                        )
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        NuvioLoadingIndicator()
                     }
                 }
 

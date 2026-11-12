@@ -641,14 +641,14 @@ class HomeViewModel(
                 // Warm the details cache for the items the user is most likely
                 // to tap (heroes + first rows), so a poster tap opens the
                 // details page from cache instead of waiting on a fresh
-                // network fetch. Bounded (12 items), sequential with a small
+                // network fetch. Bounded (20 items), sequential with a small
                 // gap so it never saturates the connection, and cancelled on
                 // the next catalog load.
                 warmupJob?.cancel()
                 warmupJob = viewModelScope.launch(Dispatchers.IO) {
-                    val candidates = (heroItems + rows.take(2).flatMap { it.items.take(6) })
+                    val candidates = (heroItems + rows.take(4).flatMap { it.items.take(6) })
                         .distinctBy { it.id }
-                        .take(12)
+                        .take(20)
                     for (item in candidates) {
                         if (!isActive) return@launch
                         val cleanId = item.id.removePrefix("tmdb:").removePrefix("tmdb/").trim()
