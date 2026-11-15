@@ -24,6 +24,9 @@ local.properties
 !App logo/**
 cinemaos_line_*.json
 *.html
+!index.html
+!auth/trakt/index.html
+!privacy/index.html
 *.sqlite
 *.dex
 *.wasm
