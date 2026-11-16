@@ -74,6 +74,11 @@ import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.NetvioMotionTokens
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.LocalReduceMotion
+import com.netvio.ui.theme.ApplyWindowBlurEffect
+import com.netvio.ui.theme.Dimens
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
+import com.netvio.ui.theme.rememberWindowDimensions
+import com.netvio.ui.theme.LocalUiBlurEnabled
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.hazeSource
@@ -102,8 +107,8 @@ object SettingsTokens {
     val LowEndFallback = Color(0xEB16161B) // #16161B at ~92%
     val PopoverFallback = Color(0xF516161B) // #16161B at ~96%
 
-    val PopoverFillLcd = Color(0xC7101016) // #101016 at 78%
-    val PopoverFillAmoled = Color(0xD60A0A0E) // #0A0A0E at 84%
+    val PopoverFillLcd = Color(0x9E0E0F14) // #0E0F14 at ~62% translucent obsidian
+    val PopoverFillAmoled = Color(0xAD07070B) // #07070B at ~68% translucent obsidian
 
     val TextWhite96 = Color.White.copy(alpha = 0.96f)
     val TextWhite88 = Color.White.copy(alpha = 0.88f)
@@ -156,6 +161,7 @@ fun Modifier.settingsGlass(
     customFill: Color? = null
 ): Modifier = composed {
     val isAmoled = LocalAmoledMode.current
+    val uiBlurEnabled = LocalUiBlurEnabled.current
     val context = LocalContext.current
     val isLowEnd = remember(context) { isDeviceLowEnd(context) }
 
@@ -165,7 +171,7 @@ fun Modifier.settingsGlass(
         else -> SettingsTokens.GlassFillLcd
     }
 
-    val canBlur = !isAmoled && !isLowEnd && hazeState != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val canBlur = uiBlurEnabled && !isLowEnd && hazeState != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
     val blurModifier = if (canBlur) {
         Modifier.hazeEffect(state = hazeState!!) {
@@ -314,12 +320,18 @@ fun SettingsScaffold(
                 .fillMaxSize()
                 .hazeSource(state = hazeState)
                 .verticalScroll(scrollState)
-                .padding(horizontal = 20.dp)
+                .adaptiveHorizontalSafePadding(baseStart = 20.dp, baseEnd = 20.dp, includeRailClearance = false)
                 .padding(
                     top = statusBarTopInset + 8.dp,
                     bottom = navBarBottomInset + 32.dp
-                )
+                ),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = Dimens.maxContentWidth)
+                    .fillMaxWidth()
+            ) {
             // Expanded Header Area
             // Top Row: 40x40dp Glass Back Button (with 48x48dp touch target)
             Box(
@@ -373,6 +385,7 @@ fun SettingsScaffold(
 
             // Screen Specific Body Content
             content(hazeState)
+            }
         }
 
         // Pinned Compact Frosted Glass Top Bar (56dp + status bar inset)
@@ -405,11 +418,13 @@ fun SettingsScaffold(
                             strokeWidth = SettingsTokens.HairlineWidth.toPx()
                         )
                     }
-                    .padding(top = statusBarTopInset, start = 20.dp, end = 20.dp),
-                contentAlignment = Alignment.CenterStart
+                    .padding(top = statusBarTopInset)
+                    .adaptiveHorizontalSafePadding(baseStart = 20.dp, baseEnd = 20.dp, includeRailClearance = false),
+                contentAlignment = Alignment.Center
             ) {
                 Row(
                     modifier = Modifier
+                        .widthIn(max = Dimens.maxContentWidth)
                         .fillMaxSize()
                         .padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -746,6 +761,7 @@ fun CustomGlassToggle(
     val haptic = LocalHapticFeedback.current
     val reduceMotion = LocalReduceMotion.current
     val isAmoled = LocalAmoledMode.current
+    val uiBlurEnabled = LocalUiBlurEnabled.current
 
     val thumbOffset by animateDpAsState(
         targetValue = if (checked) 20.dp else 0.dp,
@@ -793,7 +809,7 @@ fun CustomGlassToggle(
                 .size(width = 48.dp, height = 28.dp)
                 .clip(CircleShape)
                 .then(
-                    if (!checked && !isAmoled && hazeState != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    if (!checked && uiBlurEnabled && hazeState != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         Modifier.hazeEffect(state = hazeState) { blurRadius = 18.dp }
                     } else Modifier
                 )
@@ -834,6 +850,7 @@ fun <T> MonochromeSegmentedPillRow(
     val haptic = LocalHapticFeedback.current
     val reduceMotion = LocalReduceMotion.current
     val isAmoled = LocalAmoledMode.current
+    val uiBlurEnabled = LocalUiBlurEnabled.current
 
     Row(
         modifier = modifier
@@ -898,7 +915,7 @@ fun <T> MonochromeSegmentedPillRow(
                         .height(36.dp)
                         .clip(RoundedCornerShape(SettingsTokens.RadiusControl))
                         .then(
-                            if (!isCurrentSelected && !isAmoled && hazeState != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            if (!isCurrentSelected && uiBlurEnabled && hazeState != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                                 Modifier.hazeEffect(state = hazeState) { blurRadius = 18.dp }
                             } else Modifier
                         )
@@ -961,6 +978,7 @@ fun <T> FrostedGlassDropdown(
     val haptic = LocalHapticFeedback.current
     val reduceMotion = LocalReduceMotion.current
     val isAmoled = LocalAmoledMode.current
+    val uiBlurEnabled = LocalUiBlurEnabled.current
 
     val currentOption = remember(options, selected) {
         options.firstOrNull { it.value == selected }
@@ -1068,6 +1086,7 @@ fun <T> FrostedGlassDropdown(
                 usePlatformDefaultWidth = false
             )
         ) {
+            ApplyWindowBlurEffect(enabled = uiBlurEnabled, blurRadiusPx = 42)
             // Dismiss Backdrop (black at 28% opacity)
             Box(
                 modifier = Modifier
@@ -1081,11 +1100,17 @@ fun <T> FrostedGlassDropdown(
                 contentAlignment = Alignment.Center
             ) {
                 // Floating Popover Card
+                val popoverFill = when {
+                    !uiBlurEnabled -> SettingsTokens.PopoverFallback
+                    isAmoled -> SettingsTokens.PopoverFillAmoled
+                    else -> SettingsTokens.PopoverFillLcd
+                }
+                val popoverWindowDims = rememberWindowDimensions()
                 Box(
                     modifier = Modifier
+                        .adaptiveHorizontalSafePadding(baseStart = 20.dp, baseEnd = 20.dp, includeRailClearance = false)
                         .widthIn(min = 200.dp, max = popoverWidth.coerceAtLeast(240.dp))
-                        .heightIn(max = 390.dp)
-                        .padding(horizontal = 20.dp)
+                        .heightIn(max = popoverWindowDims.dialogMaxHeight(verticalMargin = 32.dp).coerceAtMost(390.dp))
                         .graphicsLayer {
                             scaleX = cardScale
                             scaleY = cardScale
@@ -1101,7 +1126,7 @@ fun <T> FrostedGlassDropdown(
                             hazeState = hazeState,
                             blurRadius = 22.dp,
                             customBorderColor = Color.White.copy(alpha = 0.18f),
-                            customFill = if (isAmoled) SettingsTokens.PopoverFillAmoled else SettingsTokens.PopoverFillLcd
+                            customFill = popoverFill
                         )
                 ) {
                     Column(

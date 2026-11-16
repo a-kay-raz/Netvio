@@ -58,6 +58,9 @@ import com.netvio.ui.settings.plugins.*
 import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.LocalReduceMotion
+import com.netvio.ui.theme.Dimens
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
+import com.netvio.ui.theme.rememberCenteredContentPadding
 import kotlinx.coroutines.launch
 import java.net.URLEncoder
 
@@ -193,11 +196,13 @@ fun PluginsSettingsPage(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)
-                    .padding(horizontal = 20.dp),
+                    .adaptiveHorizontalSafePadding(baseStart = 20.dp, baseEnd = 20.dp, includeRailClearance = false),
                 contentAlignment = Alignment.Center
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .widthIn(max = Dimens.maxWideContentWidth)
+                        .fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -246,10 +251,13 @@ fun PluginsSettingsPage(
                         .height(currentCollapsibleHeight)
                         .clipToBounds()
                         .alpha(1f - collapseFraction)
-                        .padding(horizontal = 20.dp)
+                        .adaptiveHorizontalSafePadding(baseStart = 20.dp, baseEnd = 20.dp, includeRailClearance = false),
+                    contentAlignment = Alignment.TopCenter
                 ) {
                     Column(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .widthIn(max = Dimens.maxWideContentWidth)
+                            .fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
                         // Headline: "Plugins" and "& addons" on two lines, 32sp medium
@@ -425,7 +433,14 @@ fun PluginsSettingsPage(
                         // TAB 1: REPOSITORIES
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(start = 20.dp, top = 16.dp, end = 20.dp, bottom = 24.dp + navBarBottomInset),
+                            contentPadding = rememberCenteredContentPadding(
+                                maxContentWidth = Dimens.maxWideContentWidth,
+                                baseStart = 20.dp,
+                                baseEnd = 20.dp,
+                                top = 16.dp,
+                                bottom = 24.dp + navBarBottomInset,
+                                includeRailClearance = false
+                            ),
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             // Section: ADD REPOSITORY
@@ -795,7 +810,14 @@ fun PluginsSettingsPage(
                         // TAB 2: STREMIO ADDONS
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(start = 20.dp, top = 16.dp, end = 20.dp, bottom = 24.dp + navBarBottomInset),
+                            contentPadding = rememberCenteredContentPadding(
+                                maxContentWidth = Dimens.maxWideContentWidth,
+                                baseStart = 20.dp,
+                                baseEnd = 20.dp,
+                                top = 16.dp,
+                                bottom = 24.dp + navBarBottomInset,
+                                includeRailClearance = false
+                            ),
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             // Section: ADD STREMIO ADDON
@@ -1138,7 +1160,14 @@ fun PluginsSettingsPage(
                         // TAB 3: INSTALLED SCRAPERS (Virtualized LazyColumn for 120 FPS performance)
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(start = 20.dp, top = 16.dp, end = 20.dp, bottom = 24.dp + navBarBottomInset),
+                            contentPadding = rememberCenteredContentPadding(
+                                maxContentWidth = Dimens.maxWideContentWidth,
+                                baseStart = 20.dp,
+                                baseEnd = 20.dp,
+                                top = 16.dp,
+                                bottom = 24.dp + navBarBottomInset,
+                                includeRailClearance = false
+                            ),
                             verticalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
                             // 44dp Glass Search Field
@@ -1709,11 +1738,15 @@ private fun HubTabRow(
     val continuousPosition = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
         .coerceIn(0f, (PluginsTab.entries.size - 1).toFloat())
 
-    Column(modifier = modifier.fillMaxWidth()) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
         Row(
             modifier = Modifier
+                .widthIn(max = Dimens.maxWideContentWidth)
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp),
+                .adaptiveHorizontalSafePadding(baseStart = 20.dp, baseEnd = 20.dp, includeRailClearance = false),
             horizontalArrangement = Arrangement.spacedBy(22.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1766,12 +1799,13 @@ private fun HubTabRow(
                 color = PluginsGlassTokens.HairlineDivider
             )
 
-            // Inner container with the EXACT same 20.dp horizontal padding as the tab row
+            // Inner container aligned identically to the centered tab row
             Box(
                 modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .widthIn(max = Dimens.maxWideContentWidth)
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-                    .align(Alignment.BottomStart)
+                    .adaptiveHorizontalSafePadding(baseStart = 20.dp, baseEnd = 20.dp, includeRailClearance = false)
             ) {
                 val baseIndex = continuousPosition.toInt().coerceIn(0, PluginsTab.entries.size - 1)
                 val nextIndex = (baseIndex + 1).coerceIn(0, PluginsTab.entries.size - 1)

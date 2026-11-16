@@ -19,9 +19,13 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
+import com.netvio.ui.theme.rememberWindowDimensions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -63,6 +67,7 @@ import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.NetvioMotionTokens
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.LocalReduceMotion
+import com.netvio.ui.theme.LocalUiBlurEnabled
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeEffect
 import kotlinx.coroutines.launch
@@ -82,13 +87,13 @@ object PluginsGlassTokens {
     val HairlineBorder = Color.White.copy(alpha = 0.16f)
     val HairlineDivider = Color.White.copy(alpha = 0.10f)
 
-    val SheetGlassFill = Color(0xFF0F1219).copy(alpha = 0.85f)
-    val SheetGlassFallback = Color(0xFF0F1219).copy(alpha = 0.96f)
-    val SheetGlassAmoledFill = Color.Black.copy(alpha = 0.92f)
+    val SheetGlassFill = Color(0xFF0F1219).copy(alpha = 0.60f)
+    val SheetGlassFallback = Color(0xFF0F1219).copy(alpha = 0.95f)
+    val SheetGlassAmoledFill = Color(0xFF06070A).copy(alpha = 0.66f)
 
-    val DialogGlassFill = Color(0xFF0F1219).copy(alpha = 0.85f)
-    val DialogGlassFallback = Color(0xFF0F1219).copy(alpha = 0.96f)
-    val DialogGlassAmoledFill = Color.Black.copy(alpha = 0.92f)
+    val DialogGlassFill = Color(0xFF0F1219).copy(alpha = 0.60f)
+    val DialogGlassFallback = Color(0xFF0F1219).copy(alpha = 0.95f)
+    val DialogGlassAmoledFill = Color(0xFF06070A).copy(alpha = 0.66f)
 
     val TextPrimary = Color.White
     val TextSecondary = Color.White.copy(alpha = 0.55f)
@@ -130,17 +135,19 @@ fun Modifier.pluginsGlassSurface(
     isSheetOrDialog: Boolean = false
 ): Modifier = composed {
     val isAmoled = LocalAmoledMode.current
+    val uiBlurEnabled = LocalUiBlurEnabled.current
     val context = LocalContext.current
     val isLowEnd = remember(context) { context.isLowEndDevice() }
+    val canBlur = uiBlurEnabled && !isLowEnd && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
     val baseColor = when {
-        isLowEnd -> if (isSheetOrDialog) PluginsGlassTokens.SheetGlassFallback else Color(0xF0101118)
-        isAmoled -> if (isSheetOrDialog) PluginsGlassTokens.SheetGlassAmoledFill else PluginsGlassTokens.AmoledBackground
+        !uiBlurEnabled || isLowEnd -> if (isSheetOrDialog) PluginsGlassTokens.SheetGlassFallback else Color(0xF0101118)
+        isAmoled -> if (isSheetOrDialog) PluginsGlassTokens.SheetGlassAmoledFill else PluginsGlassTokens.GlassFill
         isSheetOrDialog -> PluginsGlassTokens.SheetGlassFill
         else -> PluginsGlassTokens.GlassFill
     }
 
-    val blurModifier = if (!isAmoled && !isLowEnd && hazeState != null) {
+    val blurModifier = if (canBlur && hazeState != null) {
         Modifier.hazeEffect(state = hazeState) {
             blurRadius = if (isSheetOrDialog) 24.dp else 18.dp
         }
@@ -729,11 +736,13 @@ fun PluginsInstallStatusDialog(
                 ),
             contentAlignment = Alignment.Center
         ) {
+            val windowDims = rememberWindowDimensions()
             Box(
                 modifier = Modifier
+                    .adaptiveHorizontalSafePadding(baseStart = 24.dp, baseEnd = 24.dp, includeRailClearance = false)
                     .widthIn(max = 360.dp)
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp)
+                    .heightIn(max = windowDims.dialogMaxHeight())
                     .graphicsLayer {
                         scaleX = cardScale
                         scaleY = cardScale
@@ -751,7 +760,9 @@ fun PluginsInstallStatusDialog(
                     .padding(24.dp)
             ) {
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {

@@ -24,6 +24,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
@@ -67,7 +70,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.netvio.ui.components.AppAsyncImage
 import com.netvio.ui.theme.Accent
+import com.netvio.ui.theme.Dimens
 import com.netvio.ui.theme.ShapeFull
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
 import com.netvio.ui.theme.pressable
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -153,6 +158,8 @@ fun ReactionListSheet(
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .adaptiveHorizontalSafePadding(includeRailClearance = false)
+                .widthIn(max = Dimens.maxSheetWidth)
                 .fillMaxWidth()
                 .heightIn(max = maxHeight)
                 .offset { IntOffset(0, totalOffsetY.roundToInt()) }
@@ -191,6 +198,7 @@ fun ReactionListSheet(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp)
                     .navigationBarsPadding()
                     .padding(bottom = 12.dp)

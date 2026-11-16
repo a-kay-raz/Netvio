@@ -6,8 +6,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -569,6 +571,53 @@ class SupabaseRestClient(
             Result.success(allResults)
         } catch (e: Exception) {
             android.util.Log.e("SupabaseRestClient", "Pull addons exception", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Fetches profiles, settings, addons, playback, watchlist, and playlists in one RPC round-trip
+     * when `pull_sync_bundle` is deployed. Returns `Result.success(null)` if the RPC is not yet
+     * deployed (HTTP 404 / PGRST202) so callers can smoothly fall back to individual table queries.
+     */
+    suspend fun pullSyncBundle(
+        playbackSince: String? = null,
+        watchlistSince: String? = null,
+        playlistsSince: String? = null,
+        addonsSince: String? = null,
+        includeProfiles: Boolean = true,
+        includeSettings: Boolean = true
+    ): Result<CloudSyncBundle?> = withContext(Dispatchers.IO) {
+        try {
+            val payload = buildJsonObject {
+                if (!playbackSince.isNullOrBlank()) put("p_playback_since", playbackSince) else put("p_playback_since", JsonNull)
+                if (!watchlistSince.isNullOrBlank()) put("p_watchlist_since", watchlistSince) else put("p_watchlist_since", JsonNull)
+                if (!playlistsSince.isNullOrBlank()) put("p_playlists_since", playlistsSince) else put("p_playlists_since", JsonNull)
+                if (!addonsSince.isNullOrBlank()) put("p_addons_since", addonsSince) else put("p_addons_since", JsonNull)
+                put("p_include_profiles", includeProfiles)
+                put("p_include_settings", includeSettings)
+            }
+            val request = buildAuthorizedRequest(
+                Request.Builder()
+                    .url("$supabaseUrl/rest/v1/rpc/pull_sync_bundle")
+                    .header("Content-Type", "application/json")
+                    .post(payload.toString().toRequestBody(jsonMediaType))
+            ).build()
+
+            httpClient.newCall(request).execute().use { response ->
+                val raw = response.body?.string() ?: ""
+                if (response.code == 404 || (response.code == 400 && raw.contains("PGRST202"))) {
+                    return@withContext Result.success(null)
+                }
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(IOException("Pull sync bundle failed [${response.code}]: $raw"))
+                }
+                if (raw.isBlank() || raw == "null") {
+                    return@withContext Result.success(CloudSyncBundle())
+                }
+                Result.success(json.decodeFromString<CloudSyncBundle>(raw))
+            }
+        } catch (e: Exception) {
             Result.failure(e)
         }
     }

@@ -380,11 +380,34 @@ object PlayerPlaybackNetworking {
         }
     }
 
+    fun sanitizeHttpStreamUrl(rawUrl: String): String {
+        val trimmed = rawUrl.trim()
+        if (!trimmed.startsWith("http://", ignoreCase = true) && !trimmed.startsWith("https://", ignoreCase = true)) {
+            return trimmed
+        }
+        val schemeEnd = trimmed.indexOf("://")
+        if (schemeEnd < 0) return trimmed
+        val pathStart = trimmed.indexOf('/', schemeEnd + 3).let { idx ->
+            if (idx >= 0) idx else trimmed.indexOf('?', schemeEnd + 3)
+        }
+        if (pathStart < 0) return trimmed.replace(" ", "%20")
+        val prefix = trimmed.substring(0, pathStart)
+        val suffix = trimmed.substring(pathStart)
+            .replace(" ", "%20")
+            .replace("[", "%5B")
+            .replace("]", "%5D")
+            .replace("\t", "%09")
+            .replace("\r", "")
+            .replace("\n", "")
+        return prefix + suffix
+    }
+
     fun extractUrlAndInlineHeaders(
         rawUrl: String,
         existingHeaders: Map<String, String> = emptyMap()
     ): Pair<String, Map<String, String>> {
-        val cleanUrl = if (rawUrl.contains('|')) rawUrl.substringBefore('|').trim() else rawUrl.trim()
+        val rawCleanUrl = if (rawUrl.contains('|')) rawUrl.substringBefore('|').trim() else rawUrl.trim()
+        val cleanUrl = sanitizeHttpStreamUrl(rawCleanUrl)
         val inlineHeadersString = if (rawUrl.contains('|')) rawUrl.substringAfter('|').trim() else ""
 
         val normalized = LinkedHashMap<String, Pair<String, String>>()

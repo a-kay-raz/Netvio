@@ -1,18 +1,24 @@
 package com.netvio.ui.theme
 
 import android.os.Build
+import android.view.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogWindowProvider
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -41,15 +47,22 @@ object NetvioGlassTokens {
 
     const val ScrimAlpha: Float = 0.65f
 
-    // Tonal fills
+    // Translucent frosted fills when blur material is enabled; opaque fallback when disabled
     val BaseDark: Color = Color(0xFF0F1219)
     val TextDark: Color = Color(0xFF0B0B0F)
 
     fun cardFill(isAmoled: Boolean): Color =
-        if (isAmoled) Color.Black.copy(alpha = 0.92f) else BaseDark.copy(alpha = 0.85f)
+        if (isAmoled) Color(0xFF06070A).copy(alpha = 0.60f) else BaseDark.copy(alpha = 0.54f)
+
+    fun sheetWindowFill(isAmoled: Boolean, blurEnabled: Boolean): Color =
+        if (blurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (isAmoled) Color(0xFF06070A).copy(alpha = 0.66f) else BaseDark.copy(alpha = 0.60f)
+        } else {
+            fallbackFill(isAmoled)
+        }
 
     fun fallbackFill(isAmoled: Boolean): Color =
-        if (isAmoled) Color.Black.copy(alpha = 0.96f) else BaseDark.copy(alpha = 0.96f)
+        if (isAmoled) Color(0xFF050507).copy(alpha = 0.95f) else BaseDark.copy(alpha = 0.95f)
 
     // Text colors
     val TextWhite96: Color = Color.White.copy(alpha = 0.96f)
@@ -107,7 +120,38 @@ object NetvioGlassTokens {
 }
 
 /**
- * Standard modifier for modal glass cards (Dialogs & Sheets) adhering to the glass dialog formula.
+ * Applies OS-level Android 12+ background blur behind standalone Dialog / ModalBottomSheet windows.
+ */
+@Composable
+fun ApplyWindowBlurEffect(
+    enabled: Boolean = LocalUiBlurEnabled.current,
+    blurRadiusPx: Int = 56
+) {
+    val view = LocalView.current
+    SideEffect {
+        val window = (view.parent as? DialogWindowProvider)?.window
+            ?: generateSequence(view.parent) { it.parent }
+                .filterIsInstance<DialogWindowProvider>()
+                .firstOrNull()?.window
+        if (window != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (enabled) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+                window.setDimAmount(0f)
+                val lp = window.attributes
+                lp.blurBehindRadius = blurRadiusPx
+                window.attributes = lp
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+                val lp = window.attributes
+                lp.blurBehindRadius = 0
+                window.attributes = lp
+            }
+        }
+    }
+}
+
+/**
+ * Standard modifier for modal glass cards (Dialogs & Sheets) adhering to frosted blur material.
  */
 fun Modifier.netvioGlassCard(
     shape: Shape = RoundedCornerShape(NetvioGlassTokens.RadiusDialog),
@@ -115,21 +159,22 @@ fun Modifier.netvioGlassCard(
     isAmoled: Boolean = false,
     borderWidth: Dp = NetvioGlassTokens.HairlineWidth,
     borderColor: Color = NetvioGlassTokens.HairlineBorder
-): Modifier {
+): Modifier = composed {
+    val uiBlurEnabled = LocalUiBlurEnabled.current
     val cardFill = NetvioGlassTokens.cardFill(isAmoled)
     val fallback = NetvioGlassTokens.fallbackFill(isAmoled)
 
-    return this
+    this
         .clip(shape)
         .then(
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
+            if (uiBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
                 Modifier.hazeEffect(state = hazeState) {
                     blurRadius = NetvioGlassTokens.BlurRadius
                     tints = listOf(HazeTint(cardFill))
                     fallbackTint = HazeTint(fallback)
                 }
             } else {
-                Modifier.background(fallback)
+                Modifier.background(fallback, shape)
             }
         )
         .border(

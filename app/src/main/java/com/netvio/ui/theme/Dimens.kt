@@ -18,9 +18,17 @@ object Dimens {
     // Screen horizontal margins
     val screenHorizontalMarginPhone = 16.dp
     val screenHorizontalMarginTablet = 24.dp
+    val screenHorizontalMarginExpandedTablet = 32.dp
     val screenHorizontalMarginTV = 48.dp
     fun tvHorizontalMargin(screenWidth: androidx.compose.ui.unit.Dp): androidx.compose.ui.unit.Dp =
         maxOf(48.dp, screenWidth * 0.05f)
+
+    // Adaptive horizontal / tablet layout bounds
+    val maxSheetWidth = 560.dp
+    val maxDialogWidth = 420.dp
+    val maxContentWidth = 760.dp
+    val maxWideContentWidth = 820.dp
+    val maxSplitLayoutWidth = 1280.dp
 
     // Poster & Grid geometry
     val posterGap = 8.dp
@@ -34,6 +42,10 @@ object Dimens {
     val chipHeight = 36.dp
     val navBarHeight = 64.dp
     val navRailWidth = 72.dp
+    val navRailWidthCompact = 64.dp
+    val navRailWidthTablet = 84.dp
+    val navRailTabletFloatingWidth = 76.dp
+    val navRailOuterMargin = 12.dp
 
     // Hairline & Border constants
     val HairlineWidth = 1.dp

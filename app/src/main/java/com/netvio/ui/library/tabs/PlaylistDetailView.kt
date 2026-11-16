@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -80,6 +81,10 @@ import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.NetvioGlassTokens
 import com.netvio.ui.theme.LocalReduceMotion
 import com.netvio.ui.theme.pressable
+import com.netvio.ui.theme.Dimens
+import com.netvio.ui.theme.LocalNavigationLayout
+import com.netvio.ui.theme.LocalWindowDimensions
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -197,6 +202,9 @@ fun PlaylistDetailView(
         label = "topBarBorderAlpha"
     )
 
+    val windowDimensions = LocalWindowDimensions.current
+    val navLayout = LocalNavigationLayout.current
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -205,14 +213,14 @@ fun PlaylistDetailView(
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 110.dp)
+            contentPadding = PaddingValues(bottom = navLayout.recommendedBottomContentPadding)
         ) {
             // 1. Full-width Hero Collage header (~150dp tall, dimmed ~75%, soft bottom fade)
             item(key = "playlist_hero_mosaic") {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(156.dp)
+                        .height(if (windowDimensions.isCompactHeight) 116.dp else 156.dp)
                 ) {
                     PlaylistMosaic(
                         posters = posters,
@@ -241,11 +249,18 @@ fun PlaylistDetailView(
 
         // 2. Headline Block & Action Row
         item(key = "playlist_caption") {
-            Column(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                    .adaptiveHorizontalSafePadding(),
+                contentAlignment = Alignment.TopCenter
             ) {
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = Dimens.maxWideContentWidth)
+                        .fillMaxWidth()
+                        .padding(horizontal = windowDimensions.horizontalMargin, vertical = 10.dp)
+                ) {
                 // Title: 34sp medium tight line height
                 Text(
                     text = com.netvio.ui.library.sanitizeTitle(playlist.title),
@@ -297,6 +312,7 @@ fun PlaylistDetailView(
 
                 Spacer(modifier = Modifier.height(14.dp))
                 LibraryHairlineDivider()
+                }
             }
         }
 
@@ -306,15 +322,28 @@ fun PlaylistDetailView(
             key = { _, item -> "detail_item_${item.uniqueKey}" }
         ) { index, item ->
             val history = historyMap[item.mediaId]
-            StaggeredPlaylistRow(
-                index = index,
-                item = item,
-                history = history,
-                onClick = { onPlayItem(item, history) },
-                onLongClick = if (!playlist.isSystem && onRemoveItem != null) {
-                    { itemToRemove = item }
-                } else null
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .adaptiveHorizontalSafePadding(),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                Box(
+                    modifier = Modifier
+                        .widthIn(max = Dimens.maxWideContentWidth)
+                        .fillMaxWidth()
+                ) {
+                    StaggeredPlaylistRow(
+                        index = index,
+                        item = item,
+                        history = history,
+                        onClick = { onPlayItem(item, history) },
+                        onLongClick = if (!playlist.isSystem && onRemoveItem != null) {
+                            { itemToRemove = item }
+                        } else null
+                    )
+                }
+            }
         }
     }
 
@@ -349,7 +378,8 @@ fun PlaylistDetailView(
                     }
                 }
                 .statusBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 6.dp)
+                .adaptiveHorizontalSafePadding(baseStart = 12.dp, baseEnd = 12.dp)
+                .padding(vertical = 6.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),

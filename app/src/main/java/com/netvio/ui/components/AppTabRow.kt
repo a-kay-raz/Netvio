@@ -7,8 +7,11 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -80,76 +83,83 @@ fun AppTabRow(
             .fillMaxWidth()
             .background(containerColor)
     ) {
-        Row(
+        val tabScrollState = rememberScrollState()
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(20.dp)
+                .horizontalScroll(tabScrollState)
         ) {
-            tabs.forEachIndexed { index, title ->
-                val isSelected = selectedTabIndex == index
-                val interactionSource = remember { MutableInteractionSource() }
-                val textColor by animateColorAsState(
-                    targetValue = if (isSelected) contentColor else Color.White.copy(alpha = 0.55f),
-                    animationSpec = tween(180),
-                    label = "tabTextColor_$index"
-                )
-
-                Box(
-                    modifier = Modifier
-                        .onGloballyPositioned { coordinates ->
-                            val pos = coordinates.positionInParent()
-                            tabOffsets[index] = with(density) { pos.x.toDp() }
-                            tabWidths[index] = with(density) { coordinates.size.width.toDp() }
-                        }
-                        .tvFocusable(shape = ShapeS)
-                        .clickable(
-                            interactionSource = interactionSource,
-                            indication = null,
-                            role = Role.Tab,
-                            onClick = {
-                                try {
-                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm)
-                                } catch (_: Throwable) {}
-                                onTabSelected(index)
-                            }
-                        )
-                        .semantics {
-                            this.role = Role.Tab
-                            this.selected = isSelected
-                        }
-                        .padding(top = 10.dp, bottom = 12.dp),
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    Text(
-                        text = title,
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontSize = 14.sp,
-                            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                            color = textColor
-                        )
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                tabs.forEachIndexed { index, title ->
+                    val isSelected = selectedTabIndex == index
+                    val interactionSource = remember { MutableInteractionSource() }
+                    val textColor by animateColorAsState(
+                        targetValue = if (isSelected) contentColor else Color.White.copy(alpha = 0.55f),
+                        animationSpec = tween(180),
+                        label = "tabTextColor_$index"
                     )
+
+                    Box(
+                        modifier = Modifier
+                            .onGloballyPositioned { coordinates ->
+                                val pos = coordinates.positionInParent()
+                                tabOffsets[index] = with(density) { pos.x.toDp() }
+                                tabWidths[index] = with(density) { coordinates.size.width.toDp() }
+                            }
+                            .tvFocusable(shape = ShapeS)
+                            .clickable(
+                                interactionSource = interactionSource,
+                                indication = null,
+                                role = Role.Tab,
+                                onClick = {
+                                    try {
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm)
+                                    } catch (_: Throwable) {}
+                                    onTabSelected(index)
+                                }
+                            )
+                            .semantics {
+                                this.role = Role.Tab
+                                this.selected = isSelected
+                            }
+                            .padding(top = 10.dp, bottom = 12.dp),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        Text(
+                            text = title,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontSize = 14.sp,
+                                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                                color = textColor
+                            )
+                        )
+                    }
                 }
             }
-        }
 
-        // Active indicator line resting directly on top of the hairline divider
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .height(1.5.dp)
-        ) {
-            if (activeWidth > 0.dp) {
-                Box(
-                    modifier = Modifier
-                        .offset(x = animatedOffset)
-                        .width(animatedWidth)
-                        .height(1.5.dp)
-                        .background(indicatorColor)
-                )
+            // Active indicator line resting directly on top of the hairline divider
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .height(1.5.dp)
+            ) {
+                if (activeWidth > 0.dp) {
+                    Box(
+                        modifier = Modifier
+                            .offset(x = animatedOffset)
+                            .width(animatedWidth)
+                            .height(1.5.dp)
+                            .background(indicatorColor)
+                    )
+                }
             }
         }
 

@@ -8,6 +8,7 @@ import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.NoCredentialException
 import com.netvio.app.plugin.PluginRepositoryService
 import com.netvio.core.BuildConfig
 import com.netvio.core.sync.supabase.*
@@ -37,6 +38,65 @@ enum class SyncStatus {
     ERROR
 }
 
+/**
+ * Pure policy helpers governing sync throttling and per-domain dirty detection
+ * to minimize unnecessary read/write traffic against Free Tier quotas.
+ */
+internal object SyncEfficiencyPolicy {
+    const val AUTO_PULL_COOLDOWN_MS: Long = 5L * 60L * 1000L
+
+    fun shouldRunDownstreamPull(
+        forceFull: Boolean,
+        isInitialSignInRestore: Boolean,
+        lastPullMs: Long,
+        nowMs: Long
+    ): Boolean {
+        if (forceFull || isInitialSignInRestore || lastPullMs <= 0L) return true
+        val elapsed = nowMs - lastPullMs
+        return elapsed < 0L || elapsed >= AUTO_PULL_COOLDOWN_MS
+    }
+
+    fun hashProfiles(profiles: List<CloudUserProfile>): String {
+        val canonical = profiles
+            .sortedBy { it.profileId }
+            .joinToString("\n") { p ->
+                "${p.profileId}|${p.name}|${p.profileType}|${p.avatarId}|${p.customAvatarUrl.orEmpty()}|${p.pinHash.orEmpty()}|${p.isDeleted}"
+            }
+        return sha256Hex(canonical)
+    }
+
+    fun hashSettings(settings: Map<String, String>): String {
+        val canonical = settings.entries
+            .sortedBy { it.key }
+            .joinToString("\n") { (k, v) -> "$k=$v" }
+        return sha256Hex(canonical)
+    }
+
+    fun hashPlaylists(playlists: List<CloudPlaylist>): String {
+        val canonical = playlists
+            .sortedBy { it.playlistId }
+            .joinToString("\n") { pl ->
+                "${pl.playlistId}|${pl.title}|${pl.isSystem}|${pl.itemsJson}|${pl.lastPlayedAtMs}|${pl.isDeleted}"
+            }
+        return sha256Hex(canonical)
+    }
+
+    fun hashAddons(addons: List<CloudUserAddon>): String {
+        val canonical = addons
+            .sortedBy { "${it.addonType}::${it.manifestUrl}" }
+            .joinToString("\n") { a ->
+                "${a.addonType}|${a.manifestUrl}|${a.name.orEmpty()}|${a.isDeleted}"
+            }
+        return sha256Hex(canonical)
+    }
+
+    private fun sha256Hex(input: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val bytes = digest.digest(input.toByteArray(Charsets.UTF_8))
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+}
+
 class SupabaseSyncManager private constructor(
     private val context: Context,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -61,17 +121,16 @@ class SupabaseSyncManager private constructor(
     val tokenAuthenticator = SupabaseTokenAuthenticator(
         authClient = authClient,
         sessionProvider = { currentSessionCache },
+        suspendSessionProvider = {
+            currentSessionCache ?: preferencesRepository.supabaseSession.first()
+        },
         onSessionRefreshed = { refreshed ->
             currentSessionCache = refreshed
-            scope.launch {
-                preferencesRepository.setSupabaseSession(refreshed)
-            }
+            preferencesRepository.setSupabaseSession(refreshed)
         },
         onSessionExpired = {
             currentSessionCache = null
-            scope.launch {
-                preferencesRepository.clearSupabaseSession()
-            }
+            preferencesRepository.clearSupabaseSession()
         }
     )
 
@@ -104,7 +163,7 @@ class SupabaseSyncManager private constructor(
     /**
      * Schedules a debounced background sync. Call whenever local data is added, deleted, or updated.
      */
-    fun scheduleSync(delayMs: Long = 1000L) {
+    fun scheduleSync(delayMs: Long = 4000L) {
         scheduledSyncJob?.cancel()
         scheduledSyncJob = scope.launch {
             val jitter = if (delayMs > 0L) (0L..2000L).random() else 0L
@@ -153,8 +212,12 @@ class SupabaseSyncManager private constructor(
                 )
             } catch (e: GetCredentialCancellationException) {
                 return@withContext Result.failure(Exception("Sign in cancelled by user"))
+            } catch (e: NoCredentialException) {
+                return@withContext Result.failure(
+                    Exception("No Google account found on this device or Google Play Services is unavailable. Add a Google account in Android Settings and try again.")
+                )
             } catch (e: GetCredentialException) {
-                return@withContext Result.failure(Exception("Credential Manager error: ${e.message}"))
+                return@withContext Result.failure(Exception("Google sign-in unavailable: ${e.message ?: "Credential Manager error"}"))
             }
 
             val credential = result.credential
@@ -182,11 +245,12 @@ class SupabaseSyncManager private constructor(
                 currentSessionCache = session
                 preferencesRepository.setSupabaseSession(session)
 
-                // Always reset watermarks on fresh sign-in so we pull the complete cloud state
+                // Always reset watermarks and efficiency caches on fresh sign-in so we pull complete cloud state
                 preferencesRepository.setSupabasePlaybackWatermark(null)
                 preferencesRepository.setSupabaseWatchlistWatermark(null)
                 preferencesRepository.setSupabasePlaylistsWatermark(null)
                 preferencesRepository.setSupabaseAddonsWatermark(null)
+                preferencesRepository.clearSupabaseSyncCache()
                 preferencesRepository.setSupabaseLastSyncedUserId(session.userId)
                 // Clear any stale pending deletion tombstones so they don't clobber incoming cloud addons
                 val staleDeletions = preferencesRepository.supabasePendingDeletedAddonUrls.first()
@@ -293,7 +357,7 @@ class SupabaseSyncManager private constructor(
             if (dirtyRows.isEmpty()) return@withContext Result.success(Unit)
 
             // Ensure profiles exist in cloud before pushing foreign-keyed playback rows
-            syncProfilesUpstream(session)
+            syncProfilesUpstreamIfDirty(session, forcePush = false)
 
             val now = System.currentTimeMillis()
             val cloudItems = dirtyRows.map { entity ->
@@ -334,20 +398,9 @@ class SupabaseSyncManager private constructor(
         }
     }
 
-    private suspend fun syncProfilesDownstream(userId: String) {
-        val pullRes = restClient.pullProfiles(userId)
-        if (pullRes.isSuccess) {
-            val remoteProfiles = pullRes.getOrThrow()
-            if (remoteProfiles.isNotEmpty()) {
-                profileManager.mergeRemoteProfiles(remoteProfiles)
-            }
-        }
-    }
-
-    private suspend fun syncProfilesUpstream(session: SupabaseSession) {
+    private suspend fun buildLocalCloudProfiles(session: SupabaseSession, now: Long): List<CloudUserProfile> {
         val localProfiles = profileManager.profiles.value
-        val now = System.currentTimeMillis()
-        val cloudProfiles = if (localProfiles.isNotEmpty()) {
+        return if (localProfiles.isNotEmpty()) {
             localProfiles.map { prof ->
                 val normId = if (prof.id == "primary_profile") "default_user" else prof.id
                 CloudUserProfile(
@@ -375,7 +428,33 @@ class SupabaseSyncManager private constructor(
                 )
             )
         }
-        restClient.upsertProfilesBatch(cloudProfiles)
+    }
+
+    private suspend fun syncProfilesUpstreamIfDirty(
+        session: SupabaseSession,
+        forcePush: Boolean,
+        remoteMatchedProfiles: List<CloudUserProfile>? = null
+    ): Result<Unit> {
+        val cloudProfiles = buildLocalCloudProfiles(session, System.currentTimeMillis())
+        val localHash = SyncEfficiencyPolicy.hashProfiles(cloudProfiles)
+        if (!forcePush) {
+            if (!remoteMatchedProfiles.isNullOrEmpty() &&
+                SyncEfficiencyPolicy.hashProfiles(remoteMatchedProfiles) == localHash
+            ) {
+                preferencesRepository.setSupabaseHashProfiles(localHash)
+                return Result.success(Unit)
+            }
+            val storedHash = preferencesRepository.supabaseHashProfiles.first()
+            if (storedHash == localHash && (remoteMatchedProfiles == null || remoteMatchedProfiles.isNotEmpty())) {
+                return Result.success(Unit)
+            }
+        }
+
+        val res = restClient.upsertProfilesBatch(cloudProfiles)
+        if (res.isSuccess) {
+            preferencesRepository.setSupabaseHashProfiles(localHash)
+        }
+        return res
     }
 
     suspend fun syncAll(
@@ -412,191 +491,166 @@ class SupabaseSyncManager private constructor(
                 val syncSettings = preferencesRepository.supabaseSyncSettings.first()
                 val syncAddons = preferencesRepository.supabaseSyncAddons.first()
 
-                // =========================================================================
-                // PHASE 1: PROFILE SYNCHRONIZATION (Prevents HTTP 409 Foreign Key Errors)
-                // =========================================================================
-                syncProfilesDownstream(userId)
-                syncProfilesUpstream(session)
+                val lastPullMs = preferencesRepository.supabaseLastPullTimestamp.first()
+                val shouldPull = SyncEfficiencyPolicy.shouldRunDownstreamPull(
+                    forceFull = forceFull,
+                    isInitialSignInRestore = isInitialSignInRestore,
+                    lastPullMs = lastPullMs,
+                    nowMs = now
+                )
 
-                // =========================================================================
-                // PHASE 2: DOWNSTREAM PULL FIRST (Guarantees Cloud Backups Are Never Clobbered)
-                // =========================================================================
-
-                // 0. Pull Plugins & Stremio Add-ons Delta
-                if (syncAddons) {
-                    syncAddonsDownstream(userId, forceFull)
+                var firstSyncError: Throwable? = null
+                fun recordFailure(err: Throwable?) {
+                    if (err != null && firstSyncError == null) {
+                        firstSyncError = err
+                    }
                 }
 
-                // 1. Pull Playback History Delta
-                if (syncPlayback) {
-                    val playbackWatermark = if (forceFull) null else preferencesRepository.supabasePlaybackWatermark.first()
-                    val pullPlaybackRes = restClient.pullPlaybackDelta(userId, playbackWatermark)
-                    if (pullPlaybackRes.isSuccess) {
-                        val remoteItems = pullPlaybackRes.getOrThrow()
-                        Log.i(TAG, "Pulled ${remoteItems.size} playback items from cloud (watermark: $playbackWatermark)")
-                        var maxWatermark = playbackWatermark
-                        for (remote in remoteItems) {
-                            val (cleanMediaId, parsedSeason, parsedEpisode) = decodeCloudPlaybackMediaId(
-                                remote.mediaId,
-                                remote.seasonNumber,
-                                remote.episodeNumber
-                            )
-                            val cleanProvider = remote.provider.trim().ifBlank { "default" }.lowercase()
-                            val localId = PlaybackHistoryEntity.buildId(
-                                cleanProvider,
-                                cleanMediaId,
-                                parsedSeason,
-                                parsedEpisode,
-                                remote.profileId
-                            )
-                            val local = playbackHistoryDao.getProgress(localId) ?: playbackHistoryDao.getRawById(localId)
-                            val shouldUpdate = local == null ||
-                                (!local.isDirty) ||
-                                remote.lastWatchedTimestamp >= local.clientUpdatedAtMs ||
-                                (abs(remote.lastWatchedTimestamp - local.clientUpdatedAtMs) < 60_000L && remote.currentPositionMs > local.currentPositionMs)
+                var pulledProfiles: List<CloudUserProfile>? = null
 
-                            if (shouldUpdate) {
-                                val merged = PlaybackHistoryEntity(
-                                    id = localId,
-                                    mediaId = cleanMediaId,
-                                    profileId = remote.profileId,
-                                    title = remote.title,
-                                    posterUrl = remote.posterUrl ?: local?.posterUrl,
-                                    backdropUrl = remote.backdropUrl ?: local?.backdropUrl,
-                                    mediaType = remote.mediaType,
-                                    seasonNumber = parsedSeason,
-                                    episodeNumber = parsedEpisode,
-                                    episodeTitle = remote.episodeTitle ?: local?.episodeTitle,
-                                    durationMs = maxOf(remote.durationMs, local?.durationMs ?: 0L),
-                                    currentPositionMs = remote.currentPositionMs,
-                                    isCompleted = remote.isCompleted || (local?.isCompleted == true),
-                                    lastWatchedTimestamp = remote.lastWatchedTimestamp,
-                                    provider = cleanProvider,
-                                    episodeData = remote.episodeData ?: local?.episodeData,
-                                    isDismissedFromContinueWatching = remote.isDismissed,
-                                    isDirty = false,
-                                    isDeleted = remote.isDeleted,
-                                    clientUpdatedAtMs = remote.lastWatchedTimestamp
-                                )
-                                playbackHistoryDao.upsert(merged)
+                // =========================================================================
+                // PHASE 1 & 2: DOWNSTREAM PULL (Single-RPC bundle when due, cooldown-gated)
+                // =========================================================================
+                if (shouldPull) {
+                    val resetWatermarks = forceFull || isInitialSignInRestore
+                    val playbackWatermark = if (resetWatermarks) null else preferencesRepository.supabasePlaybackWatermark.first()
+                    val watchlistWatermark = if (resetWatermarks) null else preferencesRepository.supabaseWatchlistWatermark.first()
+                    val playlistsWatermark = if (resetWatermarks) null else preferencesRepository.supabasePlaylistsWatermark.first()
+                    val addonsWatermark = if (resetWatermarks) null else preferencesRepository.supabaseAddonsWatermark.first()
+
+                    val bundleRes = restClient.pullSyncBundle(
+                        playbackSince = if (syncPlayback) playbackWatermark else null,
+                        watchlistSince = if (syncWatchlist) watchlistWatermark else null,
+                        playlistsSince = if (syncPlaylists) playlistsWatermark else null,
+                        addonsSince = if (syncAddons) addonsWatermark else null,
+                        includeProfiles = true,
+                        includeSettings = syncSettings
+                    )
+
+                    if (bundleRes.isFailure) {
+                        val err = bundleRes.exceptionOrNull()
+                        Log.e(TAG, "Pull sync bundle failed: ${err?.message}")
+                        recordFailure(err)
+                    } else {
+                        val bundle = bundleRes.getOrNull()
+                        if (bundle != null) {
+                            pulledProfiles = bundle.profiles
+                            if (bundle.profiles.isNotEmpty()) {
+                                profileManager.mergeRemoteProfiles(bundle.profiles)
                             }
-
-                            val serverUpdatedAt = remote.updatedAt
-                            if (serverUpdatedAt != null) {
-                                if (maxWatermark == null || serverUpdatedAt > maxWatermark) {
-                                    maxWatermark = serverUpdatedAt
+                            if (syncAddons) {
+                                applyRemoteAddons(userId, bundle.addons, addonsWatermark, isInitialSignInRestore)
+                            }
+                            if (syncPlayback) {
+                                applyRemotePlaybackItems(bundle.playback, playbackWatermark)
+                            }
+                            if (syncWatchlist) {
+                                applyRemoteWatchlistItems(bundle.watchlist, watchlistWatermark)
+                            }
+                            if (syncPlaylists) {
+                                applyRemotePlaylists(userId, bundle.playlists, playlistsWatermark, isInitialSignInRestore)
+                            }
+                            if (syncSettings) {
+                                val settingsRes = reconcileSettingsAfterPull(now, isInitialSignInRestore, bundle.settings)
+                                if (settingsRes.isFailure) {
+                                    recordFailure(settingsRes.exceptionOrNull())
                                 }
                             }
-                        }
-                        if (maxWatermark != null) {
-                            preferencesRepository.setSupabasePlaybackWatermark(maxWatermark)
-                        }
-                    }
-                }
-
-                // 2. Pull Watchlist Delta
-                if (syncWatchlist) {
-                    val watchlistWatermark = if (forceFull) null else preferencesRepository.supabaseWatchlistWatermark.first()
-                    val pullWatchlistRes = restClient.pullWatchlistDelta(userId, watchlistWatermark)
-                    if (pullWatchlistRes.isSuccess) {
-                        val remoteWatchlist = pullWatchlistRes.getOrThrow()
-                        Log.i(TAG, "Pulled ${remoteWatchlist.size} watchlist items from cloud (watermark: $watchlistWatermark)")
-                        var maxWatermark = watchlistWatermark
-                        for (remote in remoteWatchlist) {
-                            val local = watchlistDao.getWatchlistItem(remote.mediaId, remote.profileId) ?: watchlistDao.getRawItem(remote.mediaId, remote.profileId)
-                            val shouldUpdate = local == null || (!local.isDirty) || remote.clientUpdatedAtMs >= local.clientUpdatedAtMs
-
-                            if (shouldUpdate) {
-                                val merged = WatchlistEntity(
-                                    mediaId = remote.mediaId,
-                                    profileId = remote.profileId,
-                                    title = remote.title,
-                                    posterUrl = remote.posterUrl ?: local?.posterUrl,
-                                    backdropUrl = remote.backdropUrl ?: local?.backdropUrl,
-                                    mediaType = remote.mediaType,
-                                    rating = remote.rating ?: local?.rating,
-                                    year = remote.releaseYear ?: local?.year,
-                                    status = remote.status,
-                                    addedTimestamp = remote.addedTimestamp,
-                                    isDirty = false,
-                                    isDeleted = remote.isDeleted,
-                                    clientUpdatedAtMs = remote.clientUpdatedAtMs
-                                )
-                                watchlistDao.insert(merged)
+                            if (firstSyncError == null) {
+                                preferencesRepository.setSupabaseLastPullTimestamp(now)
                             }
-
-                            val serverUpdatedAt = remote.updatedAt
-                            if (serverUpdatedAt != null) {
-                                if (maxWatermark == null || serverUpdatedAt > maxWatermark) {
-                                    maxWatermark = serverUpdatedAt
-                                }
-                            }
-                        }
-                        if (maxWatermark != null) {
-                            preferencesRepository.setSupabaseWatchlistWatermark(maxWatermark)
-                        }
-                    }
-                }
-
-                // 3. Pull Playlists Delta
-                if (syncPlaylists) {
-                    val playlistsWatermark = if (forceFull) null else preferencesRepository.supabasePlaylistsWatermark.first()
-                    val pullPlaylistsRes = restClient.pullPlaylistsDelta(userId, playlistsWatermark)
-                    if (pullPlaylistsRes.isSuccess) {
-                        val remotePlaylists = pullPlaylistsRes.getOrThrow()
-                        if (remotePlaylists.isNotEmpty()) {
-                            playlistRepository.mergeRemotePlaylists(remotePlaylists)
-                            val maxWatermark = remotePlaylists.mapNotNull { it.updatedAt }.maxOrNull()
-                            if (maxWatermark != null) {
-                                preferencesRepository.setSupabasePlaylistsWatermark(maxWatermark)
-                            }
-                        }
-                    }
-                }
-
-                // 4. Pull & Reconcile User Settings (Cloud wins on initial sign-in restore!)
-                if (syncSettings) {
-                    val pullSettingsRes = restClient.pullUserSettings(userId)
-                    val cloudSettings = pullSettingsRes.getOrNull()
-                    val remoteEntries = cloudSettings?.settingsJson ?: emptyMap()
-
-                    if (isInitialSignInRestore && remoteEntries.isNotEmpty()) {
-                        // On fresh sign-in / restore, apply cloud settings first so fresh install defaults don't clobber cloud backup
-                        val remoteValuesMap = remoteEntries.mapValues { it.value.value }
-                        preferencesRepository.applySyncableSettings(remoteValuesMap)
-                        installRestoredPluginReposIfNeeded(remoteValuesMap["repository_urls"])
-                    }
-
-                    // Push local settings (after applying remote if initial restore, or with newer timestamp on normal sync)
-                    val localSettings = preferencesRepository.getAllSyncableSettings()
-                    if (localSettings.isNotEmpty()) {
-                        if (isInitialSignInRestore && remoteEntries.isNotEmpty()) {
-                            // Only push keys that were not present in remote backup or merged collections (like favorite_media_ids)
-                            val mergedToPush = localSettings.mapValues { (key, value) ->
-                                val existingRemote = remoteEntries[key]
-                                if (existingRemote != null && key != "favorite_media_ids" && key != "repository_urls") {
-                                    existingRemote
-                                } else {
-                                    CloudSettingEntry(value = value, ts = now)
-                                }
-                            }
-                            restClient.mergeUserSettingsEntries(mergedToPush)
                         } else {
-                            restClient.mergeUserSettings(localSettings, now)
+                            // Graceful fallback to individual table queries when pull_sync_bundle RPC is absent (HTTP 404)
+                            var fallbackHadPullError = false
+
+                            val pullProfilesRes = restClient.pullProfiles(userId)
+                            if (pullProfilesRes.isSuccess) {
+                                val remoteProfiles = pullProfilesRes.getOrThrow()
+                                pulledProfiles = remoteProfiles
+                                if (remoteProfiles.isNotEmpty()) {
+                                    profileManager.mergeRemoteProfiles(remoteProfiles)
+                                }
+                            } else {
+                                fallbackHadPullError = true
+                                recordFailure(pullProfilesRes.exceptionOrNull())
+                            }
+
+                            if (syncAddons) {
+                                val addonsRes = syncAddonsDownstreamFallback(userId, addonsWatermark, isInitialSignInRestore)
+                                if (addonsRes.isFailure) {
+                                    fallbackHadPullError = true
+                                    recordFailure(addonsRes.exceptionOrNull())
+                                }
+                            }
+
+                            if (syncPlayback) {
+                                val pullPlaybackRes = restClient.pullPlaybackDelta(userId, playbackWatermark)
+                                if (pullPlaybackRes.isSuccess) {
+                                    applyRemotePlaybackItems(pullPlaybackRes.getOrThrow(), playbackWatermark)
+                                } else {
+                                    fallbackHadPullError = true
+                                    recordFailure(pullPlaybackRes.exceptionOrNull())
+                                }
+                            }
+
+                            if (syncWatchlist) {
+                                val pullWatchlistRes = restClient.pullWatchlistDelta(userId, watchlistWatermark)
+                                if (pullWatchlistRes.isSuccess) {
+                                    applyRemoteWatchlistItems(pullWatchlistRes.getOrThrow(), watchlistWatermark)
+                                } else {
+                                    fallbackHadPullError = true
+                                    recordFailure(pullWatchlistRes.exceptionOrNull())
+                                }
+                            }
+
+                            if (syncPlaylists) {
+                                val pullPlaylistsRes = restClient.pullPlaylistsDelta(userId, playlistsWatermark)
+                                if (pullPlaylistsRes.isSuccess) {
+                                    applyRemotePlaylists(userId, pullPlaylistsRes.getOrThrow(), playlistsWatermark, isInitialSignInRestore)
+                                } else {
+                                    fallbackHadPullError = true
+                                    recordFailure(pullPlaylistsRes.exceptionOrNull())
+                                }
+                            }
+
+                            if (syncSettings) {
+                                val pullSettingsRes = restClient.pullUserSettings(userId)
+                                if (pullSettingsRes.isFailure) {
+                                    fallbackHadPullError = true
+                                    recordFailure(pullSettingsRes.exceptionOrNull())
+                                } else {
+                                    val reconcileRes = reconcileSettingsAfterPull(now, isInitialSignInRestore, pullSettingsRes.getOrNull())
+                                    if (reconcileRes.isFailure) {
+                                        recordFailure(reconcileRes.exceptionOrNull())
+                                    }
+                                }
+                            }
+
+                            if (!fallbackHadPullError) {
+                                preferencesRepository.setSupabaseLastPullTimestamp(now)
+                            }
                         }
                     }
-
-                    if (!isInitialSignInRestore && remoteEntries.isNotEmpty()) {
-                        val settingsMap = remoteEntries.mapValues { it.value.value }
-                        preferencesRepository.applySyncableSettings(settingsMap)
+                } else if (syncSettings && !isInitialSignInRestore) {
+                    val pushSettingsRes = pushSettingsIfDirty(now)
+                    if (pushSettingsRes.isFailure) {
+                        recordFailure(pushSettingsRes.exceptionOrNull())
                     }
                 }
 
                 // =========================================================================
-                // PHASE 3: UPSTREAM PUSH (Pushes Remaining Dirty Local Changes to Cloud)
+                // PHASE 3: DIRTY-ONLY UPSTREAM PUSH (0 network calls when domain hash unchanged)
                 // =========================================================================
+                val pushProfilesRes = syncProfilesUpstreamIfDirty(
+                    session = session,
+                    forcePush = false,
+                    remoteMatchedProfiles = pulledProfiles
+                )
+                if (pushProfilesRes.isFailure) {
+                    Log.e(TAG, "Failed to push profiles batch: ${pushProfilesRes.exceptionOrNull()?.message}")
+                    recordFailure(pushProfilesRes.exceptionOrNull())
+                }
 
-                // 5. Push Dirty Playback History (Capped to latest 50 to protect Free Tier DB storage)
                 if (syncPlayback) {
                     val dirtyPlayback = playbackHistoryDao.getDirtyRows()
                         .sortedByDescending { it.clientUpdatedAtMs.takeIf { ts -> ts > 0L } ?: it.lastWatchedTimestamp }
@@ -632,11 +686,11 @@ class SupabaseSyncManager private constructor(
                             playbackHistoryDao.markClean(dirtyPlayback.map { it.id }, now)
                         } else {
                             Log.e(TAG, "Failed to push playback batch: ${pushPlaybackResult.exceptionOrNull()?.message}")
+                            recordFailure(pushPlaybackResult.exceptionOrNull())
                         }
                     }
                 }
 
-                // 6. Push Dirty Watchlist (Capped to latest 100 to protect Free Tier DB storage)
                 if (syncWatchlist) {
                     val dirtyWatchlist = watchlistDao.getDirtyRows()
                         .sortedByDescending { it.clientUpdatedAtMs }
@@ -668,42 +722,37 @@ class SupabaseSyncManager private constructor(
                             }
                         } else {
                             Log.e(TAG, "Failed to push watchlist batch: ${pushWatchlistResult.exceptionOrNull()?.message}")
+                            recordFailure(pushWatchlistResult.exceptionOrNull())
                         }
                     }
                 }
 
-                // 7. Push User Playlists (Capped to 10 playlists to protect Free Tier DB storage)
                 if (syncPlaylists) {
-                    val localPlaylists = playlistRepository.getAllPlaylistsIncludingDeleted()
-                        .sortedByDescending { it.clientUpdatedAtMs }
-                        .take(10)
-                    if (localPlaylists.isNotEmpty()) {
-                        val cloudPlaylists = localPlaylists.map { pl ->
-                            CloudPlaylist(
-                                userId = userId,
-                                profileId = "default_user",
-                                playlistId = pl.id,
-                                title = pl.title,
-                                isSystem = pl.isSystem,
-                                itemsJson = json.encodeToString(pl.items),
-                                createdAtMs = pl.createdAt,
-                                lastPlayedAtMs = pl.lastPlayedAt,
-                                isDeleted = pl.isDeleted,
-                                clientUpdatedAtMs = pl.clientUpdatedAtMs
-                            )
-                        }
-                        restClient.upsertPlaylistsBatch(cloudPlaylists)
+                    val pushPlaylistsRes = syncPlaylistsUpstreamIfDirty(userId)
+                    if (pushPlaylistsRes.isFailure) {
+                        Log.e(TAG, "Failed to push playlists batch: ${pushPlaylistsRes.exceptionOrNull()?.message}")
+                        recordFailure(pushPlaylistsRes.exceptionOrNull())
                     }
                 }
 
-                // 8. Push Installed Plugins & Stremio Add-ons Upstream (Suppressed during initial restore)
                 if (syncAddons && !isInitialSignInRestore) {
-                    syncAddonsUpstream(session)
+                    val pushAddonsRes = syncAddonsUpstreamIfDirty(session)
+                    if (pushAddonsRes.isFailure) {
+                        Log.e(TAG, "Failed to push addons batch: ${pushAddonsRes.exceptionOrNull()?.message}")
+                        recordFailure(pushAddonsRes.exceptionOrNull())
+                    }
                 }
 
-                preferencesRepository.setSupabaseLastSyncTimestamp(System.currentTimeMillis())
-                _syncStatus.value = SyncStatus.SUCCESS
-                Result.success(Unit)
+                if (firstSyncError != null) {
+                    val err = firstSyncError!!
+                    _syncStatus.value = SyncStatus.ERROR
+                    _syncErrorMessage.value = err.message ?: "Sync failed"
+                    Result.failure(err)
+                } else {
+                    preferencesRepository.setSupabaseLastSyncTimestamp(System.currentTimeMillis())
+                    _syncStatus.value = SyncStatus.SUCCESS
+                    Result.success(Unit)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Sync all failed", e)
                 _syncStatus.value = SyncStatus.ERROR
@@ -711,6 +760,226 @@ class SupabaseSyncManager private constructor(
                 Result.failure(e)
             }
         }
+    }
+
+    private suspend fun applyRemotePlaybackItems(
+        remoteItems: List<CloudPlaybackItem>,
+        initialWatermark: String?
+    ) {
+        if (remoteItems.isEmpty()) return
+        Log.i(TAG, "Applying ${remoteItems.size} playback items from cloud (watermark: $initialWatermark)")
+        var maxWatermark = initialWatermark
+        for (remote in remoteItems) {
+            val (cleanMediaId, parsedSeason, parsedEpisode) = decodeCloudPlaybackMediaId(
+                remote.mediaId,
+                remote.seasonNumber,
+                remote.episodeNumber
+            )
+            val cleanProvider = remote.provider.trim().ifBlank { "default" }.lowercase()
+            val localId = PlaybackHistoryEntity.buildId(
+                cleanProvider,
+                cleanMediaId,
+                parsedSeason,
+                parsedEpisode,
+                remote.profileId
+            )
+            val local = playbackHistoryDao.getProgress(localId) ?: playbackHistoryDao.getRawById(localId)
+            val shouldUpdate = local == null ||
+                (!local.isDirty) ||
+                remote.lastWatchedTimestamp >= local.clientUpdatedAtMs ||
+                (abs(remote.lastWatchedTimestamp - local.clientUpdatedAtMs) < 60_000L && remote.currentPositionMs > local.currentPositionMs)
+
+            if (shouldUpdate) {
+                val merged = PlaybackHistoryEntity(
+                    id = localId,
+                    mediaId = cleanMediaId,
+                    profileId = remote.profileId,
+                    title = remote.title,
+                    posterUrl = remote.posterUrl ?: local?.posterUrl,
+                    backdropUrl = remote.backdropUrl ?: local?.backdropUrl,
+                    mediaType = remote.mediaType,
+                    seasonNumber = parsedSeason,
+                    episodeNumber = parsedEpisode,
+                    episodeTitle = remote.episodeTitle ?: local?.episodeTitle,
+                    durationMs = maxOf(remote.durationMs, local?.durationMs ?: 0L),
+                    currentPositionMs = remote.currentPositionMs,
+                    isCompleted = remote.isCompleted || (local?.isCompleted == true),
+                    lastWatchedTimestamp = remote.lastWatchedTimestamp,
+                    provider = cleanProvider,
+                    episodeData = remote.episodeData ?: local?.episodeData,
+                    isDismissedFromContinueWatching = remote.isDismissed,
+                    isDirty = false,
+                    isDeleted = remote.isDeleted,
+                    clientUpdatedAtMs = remote.lastWatchedTimestamp
+                )
+                playbackHistoryDao.upsert(merged)
+            }
+
+            val serverUpdatedAt = remote.updatedAt
+            if (serverUpdatedAt != null && (maxWatermark == null || serverUpdatedAt > maxWatermark)) {
+                maxWatermark = serverUpdatedAt
+            }
+        }
+        if (maxWatermark != null) {
+            preferencesRepository.setSupabasePlaybackWatermark(maxWatermark)
+        }
+    }
+
+    private suspend fun applyRemoteWatchlistItems(
+        remoteWatchlist: List<CloudWatchlistItem>,
+        initialWatermark: String?
+    ) {
+        if (remoteWatchlist.isEmpty()) return
+        Log.i(TAG, "Applying ${remoteWatchlist.size} watchlist items from cloud (watermark: $initialWatermark)")
+        var maxWatermark = initialWatermark
+        for (remote in remoteWatchlist) {
+            val local = watchlistDao.getWatchlistItem(remote.mediaId, remote.profileId) ?: watchlistDao.getRawItem(remote.mediaId, remote.profileId)
+            val shouldUpdate = local == null || (!local.isDirty) || remote.clientUpdatedAtMs >= local.clientUpdatedAtMs
+
+            if (shouldUpdate) {
+                val merged = WatchlistEntity(
+                    mediaId = remote.mediaId,
+                    profileId = remote.profileId,
+                    title = remote.title,
+                    posterUrl = remote.posterUrl ?: local?.posterUrl,
+                    backdropUrl = remote.backdropUrl ?: local?.backdropUrl,
+                    mediaType = remote.mediaType,
+                    rating = remote.rating ?: local?.rating,
+                    year = remote.releaseYear ?: local?.year,
+                    status = remote.status,
+                    addedTimestamp = remote.addedTimestamp,
+                    isDirty = false,
+                    isDeleted = remote.isDeleted,
+                    clientUpdatedAtMs = remote.clientUpdatedAtMs
+                )
+                watchlistDao.insert(merged)
+            }
+
+            val serverUpdatedAt = remote.updatedAt
+            if (serverUpdatedAt != null && (maxWatermark == null || serverUpdatedAt > maxWatermark)) {
+                maxWatermark = serverUpdatedAt
+            }
+        }
+        if (maxWatermark != null) {
+            preferencesRepository.setSupabaseWatchlistWatermark(maxWatermark)
+        }
+    }
+
+    private suspend fun buildLocalCloudPlaylists(userId: String): List<CloudPlaylist> {
+        val localPlaylists = playlistRepository.getAllPlaylistsIncludingDeleted()
+            .sortedByDescending { it.clientUpdatedAtMs }
+            .take(10)
+        return localPlaylists.map { pl ->
+            CloudPlaylist(
+                userId = userId,
+                profileId = "default_user",
+                playlistId = pl.id,
+                title = pl.title,
+                isSystem = pl.isSystem,
+                itemsJson = json.encodeToString(pl.items),
+                createdAtMs = pl.createdAt,
+                lastPlayedAtMs = pl.lastPlayedAt,
+                isDeleted = pl.isDeleted,
+                clientUpdatedAtMs = pl.clientUpdatedAtMs
+            )
+        }
+    }
+
+    private suspend fun applyRemotePlaylists(
+        userId: String,
+        remotePlaylists: List<CloudPlaylist>,
+        initialWatermark: String?,
+        isInitialSignInRestore: Boolean
+    ) {
+        if (remotePlaylists.isEmpty()) return
+        val storedHash = preferencesRepository.supabaseHashPlaylists.first()
+        val localBefore = buildLocalCloudPlaylists(userId)
+        val wasLocallyDirty = storedHash == null || SyncEfficiencyPolicy.hashPlaylists(localBefore) != storedHash
+
+        playlistRepository.mergeRemotePlaylists(remotePlaylists)
+        val maxWatermark = remotePlaylists.mapNotNull { it.updatedAt }.maxOrNull() ?: initialWatermark
+        if (maxWatermark != null) {
+            preferencesRepository.setSupabasePlaylistsWatermark(maxWatermark)
+        }
+        if (!isInitialSignInRestore && !wasLocallyDirty) {
+            val postMergeHash = SyncEfficiencyPolicy.hashPlaylists(buildLocalCloudPlaylists(userId))
+            preferencesRepository.setSupabaseHashPlaylists(postMergeHash)
+        }
+    }
+
+    private suspend fun syncPlaylistsUpstreamIfDirty(userId: String): Result<Unit> {
+        val cloudPlaylists = buildLocalCloudPlaylists(userId)
+        if (cloudPlaylists.isEmpty()) return Result.success(Unit)
+        val localHash = SyncEfficiencyPolicy.hashPlaylists(cloudPlaylists)
+        val storedHash = preferencesRepository.supabaseHashPlaylists.first()
+        if (storedHash == localHash) {
+            return Result.success(Unit)
+        }
+        val res = restClient.upsertPlaylistsBatch(cloudPlaylists)
+        if (res.isSuccess) {
+            preferencesRepository.setSupabaseHashPlaylists(localHash)
+        }
+        return res
+    }
+
+    private suspend fun pushSettingsIfDirty(now: Long): Result<Unit> {
+        val localSettings = preferencesRepository.getAllSyncableSettings()
+        if (localSettings.isEmpty()) return Result.success(Unit)
+        val localHash = SyncEfficiencyPolicy.hashSettings(localSettings)
+        val storedHash = preferencesRepository.supabaseHashSettings.first()
+        if (storedHash != null && storedHash == localHash) {
+            return Result.success(Unit)
+        }
+        val pushRes = restClient.mergeUserSettings(localSettings, now)
+        if (pushRes.isSuccess) {
+            preferencesRepository.setSupabaseHashSettings(localHash)
+        }
+        return pushRes
+    }
+
+    private suspend fun reconcileSettingsAfterPull(
+        now: Long,
+        isInitialSignInRestore: Boolean,
+        cloudSettings: CloudUserSettings?
+    ): Result<Unit> {
+        val remoteEntries = cloudSettings?.settingsJson ?: emptyMap()
+        if (isInitialSignInRestore && remoteEntries.isNotEmpty()) {
+            val remoteValuesMap = remoteEntries.mapValues { it.value.value }
+            preferencesRepository.applySyncableSettings(remoteValuesMap)
+            installRestoredPluginReposIfNeeded(remoteValuesMap["repository_urls"])
+        }
+
+        val localSettings = preferencesRepository.getAllSyncableSettings()
+        val localHashBeforePush = SyncEfficiencyPolicy.hashSettings(localSettings)
+        val storedHash = preferencesRepository.supabaseHashSettings.first()
+        val localChangedSinceSync = storedHash == null || localHashBeforePush != storedHash
+
+        if (localSettings.isNotEmpty()) {
+            if (isInitialSignInRestore && remoteEntries.isNotEmpty()) {
+                val mergedToPush = localSettings.mapValues { (key, value) ->
+                    val existingRemote = remoteEntries[key]
+                    if (existingRemote != null && key != "favorite_media_ids" && key != "repository_urls") {
+                        existingRemote
+                    } else {
+                        CloudSettingEntry(value = value, ts = now)
+                    }
+                }
+                val pushRes = restClient.mergeUserSettingsEntries(mergedToPush)
+                if (pushRes.isFailure) return pushRes
+            } else if (localChangedSinceSync || remoteEntries.isEmpty()) {
+                val pushRes = restClient.mergeUserSettings(localSettings, now)
+                if (pushRes.isFailure) return pushRes
+            }
+        }
+
+        if (!isInitialSignInRestore && remoteEntries.isNotEmpty() && !localChangedSinceSync) {
+            val settingsMap = remoteEntries.mapValues { it.value.value }
+            preferencesRepository.applySyncableSettings(settingsMap)
+        }
+
+        val finalHash = SyncEfficiencyPolicy.hashSettings(preferencesRepository.getAllSyncableSettings())
+        preferencesRepository.setSupabaseHashSettings(finalHash)
+        return Result.success(Unit)
     }
 
     private fun installRestoredPluginReposIfNeeded(repoUrlsCsv: String?) {
@@ -778,151 +1047,180 @@ class SupabaseSyncManager private constructor(
     }
 
 
-    private suspend fun syncAddonsDownstream(userId: String, forceFull: Boolean) {
-        try {
-            val watermark = if (forceFull) null else preferencesRepository.supabaseAddonsWatermark.first()
-            val pullRes = restClient.pullAddonsDelta(userId, watermark)
-            if (pullRes.isSuccess) {
-                val remoteAddons = pullRes.getOrThrow()
-                Log.i(TAG, "Pulled ${remoteAddons.size} addons/repos from cloud (watermark: $watermark)")
-                var maxWatermark = watermark
+    private suspend fun buildActiveCloudAddons(userId: String, now: Long): List<CloudUserAddon> {
+        val addonRepository = com.netvio.core.addons.AddonRepository.getInstance(context)
+        val installedAddons = addonRepository.uiState.value.addons
+        val installedRepoUrls = preferencesRepository.repositoryUrls.first()
+        val activeItems = mutableListOf<CloudUserAddon>()
 
-                val addonRepository = com.netvio.core.addons.AddonRepository.getInstance(context)
-                val pluginService = PluginRepositoryService(context)
-                val currentRepoUrls = preferencesRepository.repositoryUrls.first()
-                val currentInstalledAddons = addonRepository.uiState.value.addons.map { it.manifestUrl }.toSet()
+        for (addon in installedAddons) {
+            val url = addon.manifestUrl.trim()
+            if (url.isBlank()) continue
+            activeItems.add(
+                CloudUserAddon(
+                    userId = userId,
+                    manifestUrl = url,
+                    addonType = "stremio",
+                    name = addon.userSetName ?: addon.manifest?.name,
+                    isDeleted = false,
+                    clientUpdatedAtMs = now
+                )
+            )
+        }
 
-                for (item in remoteAddons) {
-                    val url = item.manifestUrl.trim()
-                    if (url.isBlank()) continue
+        for (repoUrl in installedRepoUrls) {
+            val url = repoUrl.trim()
+            if (url.isBlank()) continue
+            activeItems.add(
+                CloudUserAddon(
+                    userId = userId,
+                    manifestUrl = url,
+                    addonType = "js_repo",
+                    name = null,
+                    isDeleted = false,
+                    clientUpdatedAtMs = now
+                )
+            )
+        }
 
-                    if (item.isDeleted) {
-                        if (item.addonType == "stremio") {
-                            // Remote deletion is a real removal, so the
-                            // addon's saved catalog preferences go with it.
-                            // The manifest id is captured before removing,
-                            // while the addon is still in the installed list;
-                            // a failed manifest refresh never removes it from
-                            // that list, so this cannot fire on a transient
-                            // failure.
-                            val manifestId = addonRepository.uiState.value.addons.firstOrNull {
-                                it.manifestUrl == url ||
-                                    it.manifestUrl == com.netvio.core.addons.AddonRepository.normalizeAddonUrl(url)
-                            }?.manifest?.id
-                            addonRepository.removeAddon(url)
-                            if (!manifestId.isNullOrBlank()) {
-                                preferencesRepository.removeCatalogPreferencesForManifestId(manifestId)
-                            }
-                        } else if (item.addonType == "js_repo") {
-                            pluginService.removeRepository(url)
-                        }
-                    } else {
-                        if (item.addonType == "stremio") {
-                            val norm = com.netvio.core.addons.AddonRepository.normalizeAddonUrl(url)
-                            if (!currentInstalledAddons.contains(url) && !currentInstalledAddons.contains(norm)) {
-                                runCatching { addonRepository.installAddon(url) }
-                            }
-                        } else if (item.addonType == "js_repo") {
-                            if (!currentRepoUrls.contains(url)) {
-                                preferencesRepository.addRepositoryUrl(url)
-                                runCatching { pluginService.installAllFromRepo(url) }
-                            }
-                        }
+        return activeItems
+    }
+
+    private suspend fun syncAddonsDownstreamFallback(
+        userId: String,
+        watermark: String?,
+        isInitialSignInRestore: Boolean
+    ): Result<Unit> {
+        val pullRes = restClient.pullAddonsDelta(userId, watermark)
+        if (pullRes.isFailure) {
+            Log.w(TAG, "Failed to pull addons delta: ${pullRes.exceptionOrNull()?.message}")
+            return Result.failure(pullRes.exceptionOrNull() ?: IOException("Pull addons failed"))
+        }
+        applyRemoteAddons(userId, pullRes.getOrThrow(), watermark, isInitialSignInRestore)
+        return Result.success(Unit)
+    }
+
+    private suspend fun applyRemoteAddons(
+        userId: String,
+        remoteAddons: List<CloudUserAddon>,
+        initialWatermark: String?,
+        isInitialSignInRestore: Boolean
+    ) {
+        if (remoteAddons.isEmpty()) return
+        Log.i(TAG, "Applying ${remoteAddons.size} addons/repos from cloud (watermark: $initialWatermark)")
+        val storedHash = preferencesRepository.supabaseHashAddons.first()
+        val pendingDeleted = preferencesRepository.supabasePendingDeletedAddonUrls.first()
+        val now = System.currentTimeMillis()
+        val wasLocallyDirty = pendingDeleted.isNotEmpty() || storedHash == null ||
+            SyncEfficiencyPolicy.hashAddons(buildActiveCloudAddons(userId, now)) != storedHash
+
+        var maxWatermark = initialWatermark
+        val addonRepository = com.netvio.core.addons.AddonRepository.getInstance(context)
+        val pluginService = PluginRepositoryService(context)
+        val currentRepoUrls = preferencesRepository.repositoryUrls.first()
+        val currentInstalledAddons = addonRepository.uiState.value.addons.map { it.manifestUrl }.toSet()
+
+        for (item in remoteAddons) {
+            val url = item.manifestUrl.trim()
+            if (url.isBlank()) continue
+
+            if (item.isDeleted) {
+                if (item.addonType == "stremio") {
+                    // Remote deletion is a real removal, so the
+                    // addon's saved catalog preferences go with it.
+                    // The manifest id is captured before removing,
+                    // while the addon is still in the installed list;
+                    // a failed manifest refresh never removes it from
+                    // that list, so this cannot fire on a transient
+                    // failure.
+                    val manifestId = addonRepository.uiState.value.addons.firstOrNull {
+                        it.manifestUrl == url ||
+                            it.manifestUrl == com.netvio.core.addons.AddonRepository.normalizeAddonUrl(url)
+                    }?.manifest?.id
+                    addonRepository.removeAddon(url)
+                    if (!manifestId.isNullOrBlank()) {
+                        preferencesRepository.removeCatalogPreferencesForManifestId(manifestId)
                     }
-
-                    val serverUpdatedAt = item.updatedAt
-                    if (serverUpdatedAt != null) {
-                        if (maxWatermark == null || serverUpdatedAt > maxWatermark) {
-                            maxWatermark = serverUpdatedAt
-                        }
-                    }
-                }
-
-                if (maxWatermark != null) {
-                    preferencesRepository.setSupabaseAddonsWatermark(maxWatermark)
+                } else if (item.addonType == "js_repo") {
+                    pluginService.removeRepository(url)
                 }
             } else {
-                Log.w(TAG, "Failed to pull addons delta: ${pullRes.exceptionOrNull()?.message}")
+                if (item.addonType == "stremio") {
+                    val norm = com.netvio.core.addons.AddonRepository.normalizeAddonUrl(url)
+                    if (!currentInstalledAddons.contains(url) && !currentInstalledAddons.contains(norm)) {
+                        runCatching { addonRepository.installAddon(url) }
+                    }
+                } else if (item.addonType == "js_repo") {
+                    if (!currentRepoUrls.contains(url)) {
+                        preferencesRepository.addRepositoryUrl(url)
+                        runCatching { pluginService.installAllFromRepo(url) }
+                    }
+                }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error syncing addons downstream", e)
+
+            val serverUpdatedAt = item.updatedAt
+            if (serverUpdatedAt != null && (maxWatermark == null || serverUpdatedAt > maxWatermark)) {
+                maxWatermark = serverUpdatedAt
+            }
+        }
+
+        if (maxWatermark != null) {
+            preferencesRepository.setSupabaseAddonsWatermark(maxWatermark)
+        }
+        if (!isInitialSignInRestore && !wasLocallyDirty) {
+            val postApplyHash = SyncEfficiencyPolicy.hashAddons(buildActiveCloudAddons(userId, now))
+            preferencesRepository.setSupabaseHashAddons(postApplyHash)
         }
     }
 
-    private suspend fun syncAddonsUpstream(session: SupabaseSession) {
-        try {
-            val addonRepository = com.netvio.core.addons.AddonRepository.getInstance(context)
-            val installedAddons = addonRepository.uiState.value.addons
-            val installedRepoUrls = preferencesRepository.repositoryUrls.first()
-            val pendingDeleted = preferencesRepository.supabasePendingDeletedAddonUrls.first()
-            val now = System.currentTimeMillis()
-            val isUnderRestoreCooldown = (now - lastInitialRestoreTimestamp.get()) < 45_000L
-            val activePendingDeletions = if (isUnderRestoreCooldown) emptySet() else pendingDeleted
+    private suspend fun syncAddonsUpstreamIfDirty(session: SupabaseSession): Result<Unit> {
+        val now = System.currentTimeMillis()
+        val activeItems = buildActiveCloudAddons(session.userId, now)
+        val pendingDeleted = preferencesRepository.supabasePendingDeletedAddonUrls.first()
+        val isUnderRestoreCooldown = (now - lastInitialRestoreTimestamp.get()) < 45_000L
+        val activePendingDeletions = if (isUnderRestoreCooldown) emptySet() else pendingDeleted
 
-            val itemsToPush = mutableListOf<CloudUserAddon>()
-
-            // Active Stremio Addons
-            for (addon in installedAddons) {
-                val url = addon.manifestUrl.trim()
-                if (url.isBlank()) continue
-                itemsToPush.add(
-                    CloudUserAddon(
-                        userId = session.userId,
-                        manifestUrl = url,
-                        addonType = "stremio",
-                        name = addon.userSetName ?: addon.manifest?.name,
-                        isDeleted = false,
-                        clientUpdatedAtMs = now
-                    )
-                )
-            }
-
-            // Active JS Repositories
-            for (repoUrl in installedRepoUrls) {
-                val url = repoUrl.trim()
-                if (url.isBlank()) continue
-                itemsToPush.add(
-                    CloudUserAddon(
-                        userId = session.userId,
-                        manifestUrl = url,
-                        addonType = "js_repo",
-                        name = null,
-                        isDeleted = false,
-                        clientUpdatedAtMs = now
-                    )
-                )
-            }
-
-            // Pending Deletions (Tombstones) - Protected by 45s restore cooldown
-            for (delUrl in activePendingDeletions) {
-                val url = delUrl.trim()
-                if (url.isBlank()) continue
-                itemsToPush.add(
-                    CloudUserAddon(
-                        userId = session.userId,
-                        manifestUrl = url,
-                        addonType = if (url.endsWith(".json") || url.contains("/manifest")) "stremio" else "js_repo",
-                        name = null,
-                        isDeleted = true,
-                        clientUpdatedAtMs = now
-                    )
-                )
-            }
-
-            if (itemsToPush.isNotEmpty()) {
-                val pushRes = restClient.upsertAddonsBatch(itemsToPush)
-                if (pushRes.isSuccess) {
-                    Log.i(TAG, "Successfully synced ${itemsToPush.size} addons & repos to cloud")
-                    if (activePendingDeletions.isNotEmpty()) {
-                        preferencesRepository.clearPendingDeletedAddonUrls(activePendingDeletions)
-                    }
-                } else {
-                    Log.e(TAG, "Failed to push addons batch: ${pushRes.exceptionOrNull()?.message}")
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error syncing addons upstream", e)
+        val activeHash = SyncEfficiencyPolicy.hashAddons(activeItems)
+        val storedHash = preferencesRepository.supabaseHashAddons.first()
+        if (activePendingDeletions.isEmpty() && storedHash == activeHash) {
+            return Result.success(Unit)
         }
+
+        val itemsToPush = ArrayList<CloudUserAddon>(activeItems.size + activePendingDeletions.size)
+        itemsToPush.addAll(activeItems)
+
+        // Pending Deletions (Tombstones) - Protected by 45s restore cooldown
+        for (delUrl in activePendingDeletions) {
+            val url = delUrl.trim()
+            if (url.isBlank()) continue
+            itemsToPush.add(
+                CloudUserAddon(
+                    userId = session.userId,
+                    manifestUrl = url,
+                    addonType = if (url.endsWith(".json") || url.contains("/manifest")) "stremio" else "js_repo",
+                    name = null,
+                    isDeleted = true,
+                    clientUpdatedAtMs = now
+                )
+            )
+        }
+
+        if (itemsToPush.isEmpty()) {
+            preferencesRepository.setSupabaseHashAddons(activeHash)
+            return Result.success(Unit)
+        }
+
+        val pushRes = restClient.upsertAddonsBatch(itemsToPush)
+        if (pushRes.isSuccess) {
+            Log.i(TAG, "Successfully synced ${itemsToPush.size} addons & repos to cloud")
+            if (activePendingDeletions.isNotEmpty()) {
+                preferencesRepository.clearPendingDeletedAddonUrls(activePendingDeletions)
+            }
+            preferencesRepository.setSupabaseHashAddons(activeHash)
+        } else {
+            Log.e(TAG, "Failed to push addons batch: ${pushRes.exceptionOrNull()?.message}")
+        }
+        return pushRes
     }
 
     private fun sanitizeCloudUrl(url: String?): String? {

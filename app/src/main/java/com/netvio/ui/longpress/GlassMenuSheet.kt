@@ -23,7 +23,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.outlined.Block
@@ -56,6 +59,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.netvio.ui.components.AppAsyncImage
+import com.netvio.ui.theme.Dimens
+import com.netvio.ui.theme.LocalWindowDimensions
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -122,18 +128,20 @@ fun GlassMenuSheet(
 
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
+    val windowDimensions = LocalWindowDimensions.current
     val screenHeight = configuration.screenHeightDp.dp
     val screenWidth = configuration.screenWidthDp.dp
 
     // Menu dimensions: 5 or 6 rows @ 52 dp + dividers @ 0.5 dp
     val menuHeight = if (actions.onAddToPlaylist != null) 314.dp else 262.dp
     val menuBottomMargin = 16.dp
-    val gapBetweenPosterAndMenu = 24.dp
-    val minTopStatusMargin = 32.dp
+    val gapBetweenPosterAndMenu = if (windowDimensions.isCompactHeight) 12.dp else 24.dp
+    val minTopStatusMargin = if (windowDimensions.isCompactHeight) 16.dp else 32.dp
 
     // Poster size calculation: 240 dp default, shrinks preserving 2:3 ratio if tight
     val availablePosterHeight = screenHeight - minTopStatusMargin - gapBetweenPosterAndMenu - menuHeight - menuBottomMargin
-    val posterHeight = if (availablePosterHeight < 240.dp) availablePosterHeight.coerceAtLeast(140.dp) else 240.dp
+    val minPosterHeight = if (windowDimensions.isCompactHeight) 96.dp else 140.dp
+    val posterHeight = availablePosterHeight.coerceIn(minPosterHeight, 240.dp)
     val posterWidth = posterHeight * (2f / 3f)
 
     var isInWatchlist by remember(item.id, item.inWatchlist) { mutableStateOf(item.inWatchlist) }
@@ -181,7 +189,10 @@ fun GlassMenuSheet(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .adaptiveHorizontalSafePadding(includeRailClearance = false)
+                .widthIn(max = Dimens.maxSheetWidth)
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .navigationBarsPadding()
                 .padding(start = 16.dp, end = 16.dp, bottom = menuBottomMargin)
                 .graphicsLayer {

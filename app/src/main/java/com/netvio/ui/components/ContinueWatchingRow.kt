@@ -48,6 +48,7 @@ import com.netvio.ui.theme.ShapeM
 import com.netvio.ui.theme.SurfaceLow
 import com.netvio.ui.theme.TextPrimary
 import com.netvio.ui.theme.pressable
+import com.netvio.ui.theme.rememberAdaptiveHorizontalPadding
 import com.netvio.ui.theme.rememberWindowDimensions
 
 /**
@@ -94,7 +95,10 @@ fun ContinueWatchingRow(
 
         LazyRow(
             state = continueWatchingState,
-            contentPadding = PaddingValues(horizontal = windowDimensions.horizontalMargin),
+            contentPadding = rememberAdaptiveHorizontalPadding(
+                baseStart = windowDimensions.horizontalMargin,
+                baseEnd = windowDimensions.horizontalMargin
+            ),
             horizontalArrangement = Arrangement.spacedBy(horizontalGap),
             modifier = Modifier.fillMaxWidth()
         ) {

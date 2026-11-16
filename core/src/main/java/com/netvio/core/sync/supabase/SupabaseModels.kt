@@ -1,8 +1,38 @@
 package com.netvio.core.sync.supabase
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+
+/**
+ * Decodes `jsonb` columns that may arrive either as a raw JSON array/object
+ * or as a string-encoded JSON scalar (e.g. `user_playlists.items_json`).
+ */
+object FlexibleJsonStringSerializer : KSerializer<String> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("FlexibleJsonString", PrimitiveKind.STRING)
+
+    override fun deserialize(decoder: Decoder): String {
+        val jsonDecoder = decoder as? JsonDecoder ?: return decoder.decodeString()
+        return when (val element = jsonDecoder.decodeJsonElement()) {
+            is JsonPrimitive -> element.contentOrNull ?: element.toString()
+            else -> element.toString()
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: String) {
+        encoder.encodeString(value)
+    }
+}
 
 @Serializable
 data class SupabaseAuthTokenResponse(
@@ -92,6 +122,7 @@ data class CloudPlaylist(
     @SerialName("playlist_id") val playlistId: String,
     val title: String,
     @SerialName("is_system") val isSystem: Boolean = false,
+    @Serializable(with = FlexibleJsonStringSerializer::class)
     @SerialName("items_json") val itemsJson: String = "[]",
     @SerialName("created_at_ms") val createdAtMs: Long = System.currentTimeMillis(),
     @SerialName("last_played_at_ms") val lastPlayedAtMs: Long = 0L,
@@ -148,4 +179,14 @@ data class CloudUserAddon(
     @SerialName("is_deleted") val isDeleted: Boolean = false,
     @SerialName("client_updated_at_ms") val clientUpdatedAtMs: Long = System.currentTimeMillis(),
     @SerialName("updated_at") val updatedAt: String? = null
+)
+
+@Serializable
+data class CloudSyncBundle(
+    val profiles: List<CloudUserProfile> = emptyList(),
+    val settings: CloudUserSettings? = null,
+    val addons: List<CloudUserAddon> = emptyList(),
+    val playback: List<CloudPlaybackItem> = emptyList(),
+    val watchlist: List<CloudWatchlistItem> = emptyList(),
+    val playlists: List<CloudPlaylist> = emptyList()
 )

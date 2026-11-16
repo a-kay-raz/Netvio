@@ -56,6 +56,7 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -85,6 +86,7 @@ import com.netvio.ui.theme.NetvioGlassTokens
 import com.netvio.ui.theme.NetvioMotionTokens
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.LocalReduceMotion
+import com.netvio.ui.theme.LocalUiBlurEnabled
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -106,9 +108,9 @@ object ProfileGlassTokens {
     val HairlineBorderActive = Color.White.copy(alpha = 0.30f)
     val HairlineDivider = Color.White.copy(alpha = 0.10f)
 
-    val SheetGlassFill = Color(0xFF0F1219).copy(alpha = 0.85f)
-    val SheetGlassAmoledFill = Color.Black.copy(alpha = 0.92f)
-    val SheetGlassFallback = Color(0xFF0F1219).copy(alpha = 0.96f)
+    val SheetGlassFill = Color(0xFF0F1219).copy(alpha = 0.60f)
+    val SheetGlassAmoledFill = Color(0xFF06070A).copy(alpha = 0.66f)
+    val SheetGlassFallback = Color(0xFF0F1219).copy(alpha = 0.95f)
     val SheetHairlineBorder = Color.White.copy(alpha = 0.16f)
 
     val TextPrimary = Color(0xFFFFFFFF)
@@ -139,11 +141,12 @@ fun Modifier.profileGlassSurface(
     isActive: Boolean = false,
     customFill: Color = ProfileGlassTokens.GlassFill,
     fallbackFill: Color = ProfileGlassTokens.GlassFallbackFill
-): Modifier {
-    val canBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null && !isAmoled
+): Modifier = composed {
+    val uiBlurEnabled = LocalUiBlurEnabled.current
+    val canBlur = uiBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null
     val borderColor = if (isActive) ProfileGlassTokens.HairlineBorderActive else ProfileGlassTokens.HairlineBorder
 
-    return this
+    this
         .clip(shape)
         .then(
             if (canBlur) {

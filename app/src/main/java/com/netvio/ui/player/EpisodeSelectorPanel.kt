@@ -216,6 +216,7 @@ fun EpisodeSelectorPanel(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
                 .padding(top = 58.dp, end = 24.dp)
         ) {
             val maxHeight = (configuration.screenHeightDp * 0.65f).dp

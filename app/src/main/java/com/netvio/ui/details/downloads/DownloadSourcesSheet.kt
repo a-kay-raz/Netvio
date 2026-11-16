@@ -1,9 +1,6 @@
 package com.netvio.ui.details.downloads
 
-import android.content.Intent
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.snap
@@ -66,6 +63,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import com.netvio.ui.theme.ApplyWindowBlurEffect
+import com.netvio.ui.theme.NetvioGlassTokens
+import com.netvio.ui.theme.LocalAmoledMode
+import com.netvio.ui.theme.LocalUiBlurEnabled
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -118,7 +119,6 @@ fun DownloadSourcesSheet(
     val downloadRepository = remember { DownloadRepository.getInstance(context) }
     val preferencesRepository = remember { PreferencesRepository.getInstance(context) }
 
-    val customDownloadDir by preferencesRepository.customDownloadDir.collectAsState(initial = null)
     val isDebridEnabled by preferencesRepository.debridEnabled.collectAsState(initial = false)
     val activeDebridProvider by preferencesRepository.activeDebridProvider.collectAsState(initial = "NONE")
     val realDebridApiKey by preferencesRepository.realDebridApiKey.collectAsState(initial = "")
@@ -132,7 +132,6 @@ fun DownloadSourcesSheet(
 
     var pendingStreamToDownload by remember { mutableStateOf<Pair<StreamItem, String>?>(null) }
     var showFirstDownloadDialog by remember { mutableStateOf(false) }
-    var showSelectDirectoryDialog by remember { mutableStateOf(false) }
     var insufficientStorageData by remember { mutableStateOf<Pair<Long, Long>?>(null) }
 
     val effectiveEpisode = remember(detail, episode) {
@@ -242,99 +241,22 @@ fun DownloadSourcesSheet(
 
         coroutineScope.launch {
             try {
-                val cleanQuality = stream.quality ?: if (stream.isTorrentStream) "Torrent" else "Direct Stream"
-
-                if (stream.isTorrentStream) {
-                    val magnet = stream.effectiveMagnetOrHash
-                    if (magnet.isNullOrBlank()) {
-                        activeDownloadState = StreamDownloadState.IDLE
-                        activeDownloadStreamId = null
-                        onDownloadStarted("Invalid torrent magnet")
-                        return@launch
-                    }
-
-                    val pType = DebridProviderType.fromId(activeDebridProvider)
-                    var apiKey = when (pType) {
-                        DebridProviderType.REAL_DEBRID -> realDebridApiKey
-                        DebridProviderType.ALL_DEBRID -> allDebridApiKey
-                        DebridProviderType.TORBOX -> torBoxApiKey
-                        DebridProviderType.NONE -> ""
-                    }
-                    var effectiveProvider = pType
-                    if (apiKey.isBlank()) {
-                        if (realDebridApiKey.isNotBlank()) {
-                            apiKey = realDebridApiKey
-                            effectiveProvider = DebridProviderType.REAL_DEBRID
-                        } else if (allDebridApiKey.isNotBlank()) {
-                            apiKey = allDebridApiKey
-                            effectiveProvider = DebridProviderType.ALL_DEBRID
-                        } else if (torBoxApiKey.isNotBlank()) {
-                            apiKey = torBoxApiKey
-                            effectiveProvider = DebridProviderType.TORBOX
-                        }
-                    }
-
-                    val canUseDebrid = isDebridEnabled && apiKey.isNotBlank() && effectiveProvider != DebridProviderType.NONE
-
-                    if (canUseDebrid) {
-                        onDownloadStarted("Unrestricting with ${effectiveProvider.displayName}...")
-                        val resolveResult = withContext(Dispatchers.IO) {
-                            DebridManager.getInstance().resolveStream(
-                                providerType = effectiveProvider,
-                                apiKey = apiKey,
-                                linkOrMagnet = magnet,
-                                fileIdx = stream.fileIdx,
-                                season = effectiveEpisode?.seasonNumber,
-                                episode = effectiveEpisode?.episodeNumber,
-                                originalResolutionLabel = stream.quality
-                            )
-                        }
-
-                        if (resolveResult.isSuccess) {
-                            val resolvedSource = resolveResult.getOrThrow()
-                            if (resolvedSource.url.isBlank() || !resolvedSource.url.startsWith("http")) {
-                                throw IllegalStateException("Debrid returned an invalid unrestrict URL")
-                            }
-                            val directStream = stream.copy(
-                                url = resolvedSource.url,
-                                headers = resolvedSource.headers
-                            )
-                            val preflight = downloadRepository.enqueueFromStream(
-                                detail = detail,
-                                episode = effectiveEpisode,
-                                stream = directStream
-                            )
-                            handleEnqueueResult(preflight, "Downloading $cleanQuality...")
-                        } else {
-                            val err = resolveResult.exceptionOrNull()?.message ?: "Debrid resolution failed"
-                            onDownloadStarted("Debrid fallback to P2P: $err")
-                            val torrentStream = stream.copy(url = magnet)
-                            val preflight = downloadRepository.enqueueFromStream(
-                                detail = detail,
-                                episode = effectiveEpisode,
-                                stream = torrentStream
-                            )
-                            handleEnqueueResult(preflight, "Starting Native P2P Download...")
-                        }
-                    } else {
-                        // Direct Native P2P torrent download
-                        val torrentStream = stream.copy(url = magnet)
-                        val preflight = downloadRepository.enqueueFromStream(
-                            detail = detail,
-                            episode = effectiveEpisode,
-                            stream = torrentStream
-                        )
-                        handleEnqueueResult(preflight, "Starting Native P2P Torrent Download...")
-                    }
-                } else {
-                    // Direct stream download
-                    val preflight = downloadRepository.enqueueFromStream(
-                        detail = detail,
-                        episode = effectiveEpisode,
-                        stream = stream
-                    )
-                    handleEnqueueResult(preflight, "Downloading $cleanQuality...")
-                }
+                val debrid = resolveEffectiveDebridCredentials(
+                    debridEnabled = isDebridEnabled,
+                    activeProviderId = activeDebridProvider,
+                    realDebridKey = realDebridApiKey,
+                    allDebridKey = allDebridApiKey,
+                    torBoxKey = torBoxApiKey
+                )
+                val outcome = resolveAndEnqueueStream(
+                    downloadRepository = downloadRepository,
+                    detail = detail,
+                    episode = effectiveEpisode,
+                    stream = stream,
+                    debrid = debrid,
+                    onProgressNotice = onDownloadStarted
+                )
+                handleEnqueueResult(outcome.preflight, outcome.statusMessage)
             } catch (t: Throwable) {
                 activeDownloadState = StreamDownloadState.IDLE
                 activeDownloadStreamId = null
@@ -343,35 +265,8 @@ fun DownloadSourcesSheet(
         }
     }
 
-    val folderPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri != null) {
-            try {
-                val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                context.contentResolver.takePersistableUriPermission(uri, flags)
-            } catch (_: Exception) {}
-            val resolvedPath = DownloadEngine.resolveTreeUriToPath(uri)
-            coroutineScope.launch {
-                preferencesRepository.setCustomDownloadDir(resolvedPath)
-                preferencesRepository.setFirstDownloadAlertDismissed(true)
-                Toast.makeText(context, "Download location set to $resolvedPath", Toast.LENGTH_SHORT).show()
-                val pending = pendingStreamToDownload
-                pendingStreamToDownload = null
-                if (pending != null) {
-                    executeStreamDownload(pending.first, pending.second)
-                }
-            }
-        } else {
-            pendingStreamToDownload = null
-        }
-    }
-
     val handleStreamDownload: (StreamItem, String) -> Unit = { stream, streamKey ->
-        if (customDownloadDir.isNullOrBlank()) {
-            pendingStreamToDownload = stream to streamKey
-            showSelectDirectoryDialog = true
-        } else if (!firstDownloadAlertDismissed) {
+        if (!firstDownloadAlertDismissed) {
             pendingStreamToDownload = stream to streamKey
             showFirstDownloadDialog = true
         } else {
@@ -405,14 +300,22 @@ fun DownloadSourcesSheet(
         DownloadTokens.parseRuntimeMinutes(effectiveEpisode?.duration ?: detail.duration)
     }
 
+    val isAmoled = LocalAmoledMode.current
+    val uiBlurEnabled = LocalUiBlurEnabled.current
+    val sheetContainerColor = NetvioGlassTokens.sheetWindowFill(
+        isAmoled = isAmoled,
+        blurEnabled = uiBlurEnabled
+    )
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
+        sheetMaxWidth = com.netvio.ui.theme.Dimens.maxSheetWidth,
         shape = RoundedCornerShape(
             topStart = DownloadTokens.sheetCornerRadius,
             topEnd = DownloadTokens.sheetCornerRadius
         ),
-        containerColor = DownloadTokens.sheetBackground,
+        containerColor = sheetContainerColor,
         scrimColor = DownloadTokens.scrimColor,
         dragHandle = {
             Box(
@@ -436,6 +339,7 @@ fun DownloadSourcesSheet(
         },
         modifier = modifier
     ) {
+        ApplyWindowBlurEffect(enabled = uiBlurEnabled)
         EditorialDownloadContent(
             title = subtitleText,
             allStreams = availableStreams,
@@ -448,28 +352,6 @@ fun DownloadSourcesSheet(
             onDownloadClick = handleStreamDownload,
             onLongClick = onLongClickCopy,
             onRetry = onRetry
-        )
-    }
-
-    if (showSelectDirectoryDialog) {
-        VelvetAlertDialog(
-            onDismissRequest = {
-                showSelectDirectoryDialog = false
-                pendingStreamToDownload = null
-            },
-            title = "Choose Download Location",
-            message = "Before starting downloads, please choose a storage folder. You can select internal storage or an SD card.",
-            confirmText = "Select Folder",
-            dismissText = "Cancel",
-            icon = Icons.Outlined.Download,
-            onConfirm = {
-                showSelectDirectoryDialog = false
-                folderPickerLauncher.launch(null)
-            },
-            onDismiss = {
-                showSelectDirectoryDialog = false
-                pendingStreamToDownload = null
-            }
         )
     }
 
@@ -494,7 +376,7 @@ fun DownloadSourcesSheet(
                 pendingStreamToDownload = null
             },
             title = "Download Storage Notice",
-            message = "Downloaded media files will be saved to your device's external downloads directory for offline playback. You can configure a custom download path anytime in Settings.",
+            message = "Downloaded media files will be saved in app storage for offline playback. You can switch between Internal Storage and SD Card anytime in Settings.",
             confirmText = "Proceed",
             dismissText = "Cancel",
             icon = Icons.Outlined.Download,

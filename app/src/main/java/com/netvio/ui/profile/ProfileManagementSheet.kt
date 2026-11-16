@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -85,6 +86,8 @@ import com.netvio.ui.components.tvFocusable
 import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.LocalReduceMotion
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
+import com.netvio.ui.theme.rememberWindowDimensions
 
 /**
  * Screen 2: "Who's watching?" Profile Screen.
@@ -222,64 +225,87 @@ fun ProfileManagementSheet(
                     } else Modifier
                 )
         ) {
+            val windowDims = rememberWindowDimensions()
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
                     .navigationBarsPadding()
             ) {
-                // 1. Top Area: Headline "Who's watching?" on two lines + "Done" glass pill
-                Row(
+                // 1. Top Area: Headline "Who's watching?" + "Done" glass pill
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 22.dp)
-                        .padding(top = 20.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top
+                        .adaptiveHorizontalSafePadding(baseStart = 22.dp, baseEnd = 22.dp, includeRailClearance = false)
+                        .padding(top = if (windowDims.isCompactHeight) 10.dp else 20.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Column(
+                    Row(
                         modifier = Modifier
-                            .weight(1f)
-                            .graphicsLayer { alpha = headlineAlpha }
+                            .widthIn(max = 760.dp)
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top
                     ) {
-                        Text(
-                            text = "Who's",
-                            style = TextStyle(
-                                fontFamily = AppFontFamily,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 40.sp,
-                                lineHeight = 40.sp,
-                                letterSpacing = (-0.03).sp,
-                                color = Color.White
-                            )
-                        )
-                        Text(
-                            text = "watching?",
-                            style = TextStyle(
-                                fontFamily = AppFontFamily,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 40.sp,
-                                lineHeight = 40.sp,
-                                letterSpacing = (-0.03).sp,
-                                color = Color.White
-                            )
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .graphicsLayer { alpha = headlineAlpha }
+                        ) {
+                            if (windowDims.isCompactHeight) {
+                                Text(
+                                    text = "Who's watching?",
+                                    style = TextStyle(
+                                        fontFamily = AppFontFamily,
+                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 26.sp,
+                                        lineHeight = 28.sp,
+                                        letterSpacing = (-0.02).sp,
+                                        color = Color.White
+                                    )
+                                )
+                            } else {
+                                Text(
+                                    text = "Who's",
+                                    style = TextStyle(
+                                        fontFamily = AppFontFamily,
+                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 40.sp,
+                                        lineHeight = 40.sp,
+                                        letterSpacing = (-0.03).sp,
+                                        color = Color.White
+                                    )
+                                )
+                                Text(
+                                    text = "watching?",
+                                    style = TextStyle(
+                                        fontFamily = AppFontFamily,
+                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 40.sp,
+                                        lineHeight = 40.sp,
+                                        letterSpacing = (-0.03).sp,
+                                        color = Color.White
+                                    )
+                                )
+                            }
+                        }
+
+                        ProfileGlassPill(
+                            text = "Done",
+                            onClick = ::animateDismiss,
+                            visualHeight = 36.dp,
+                            horizontalPadding = 18.dp,
+                            fontSize = 13
                         )
                     }
-
-                    ProfileGlassPill(
-                        text = "Done",
-                        onClick = ::animateDismiss,
-                        visualHeight = 36.dp,
-                        horizontalPadding = 18.dp,
-                        fontSize = 13
-                    )
                 }
 
                 // 2. Center Focus Area (Vertically centered between headline and dock)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
+                        .weight(1f)
+                        .adaptiveHorizontalSafePadding(baseStart = 22.dp, baseEnd = 22.dp, includeRailClearance = false),
                     contentAlignment = Alignment.Center
                 ) {
                     AnimatedContent(
@@ -294,70 +320,137 @@ fun ProfileManagementSheet(
                         },
                         label = "HeroProfileCrossfade"
                     ) { currentProfile ->
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
-                            modifier = Modifier.graphicsLayer {
-                                alpha = heroAlpha
-                                scaleX = heroScale
-                                scaleY = heroScale
+                        if (windowDims.isCompactHeight) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(28.dp),
+                                modifier = Modifier.graphicsLayer {
+                                    alpha = heroAlpha
+                                    scaleX = heroScale
+                                    scaleY = heroScale
+                                }
+                            ) {
+                                AvatarWithThinRing(
+                                    avatarId = currentProfile.avatarId,
+                                    avatarSize = 104.dp,
+                                    ringGap = 8.dp,
+                                    ringBorderWidth = 0.5.dp,
+                                    ringColor = Color.White.copy(alpha = 0.16f),
+                                    onClick = {
+                                        editingProfile = currentProfile
+                                        isCreatingNew = false
+                                    }
+                                )
+
+                                Column(
+                                    horizontalAlignment = Alignment.Start,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Text(
+                                        text = currentProfile.name,
+                                        style = TextStyle(
+                                            fontFamily = AppFontFamily,
+                                            fontWeight = FontWeight.Medium,
+                                            fontSize = 24.sp,
+                                            lineHeight = 26.sp,
+                                            letterSpacing = (-0.02).sp,
+                                            color = Color.White
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+
+                                    ProfileGlassChip(
+                                        text = if (currentProfile.isKids) "Kids" else currentProfile.type.displayName,
+                                        showLockIcon = currentProfile.isPinLocked
+                                    )
+
+                                    Spacer(modifier = Modifier.height(14.dp))
+
+                                    ProfileGlassPill(
+                                        text = "Edit profile",
+                                        icon = Icons.Outlined.Edit,
+                                        visualHeight = 40.dp,
+                                        horizontalPadding = 20.dp,
+                                        fontSize = 13,
+                                        onClick = {
+                                            try {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            } catch (_: Exception) {}
+                                            editingProfile = currentProfile
+                                            isCreatingNew = false
+                                        }
+                                    )
+                                }
                             }
-                        ) {
-                            // Large avatar: 150 dp, thin ring: 0.5 px white at 16%, 12 dp gap (outer size 174 dp)
-                            AvatarWithThinRing(
-                                avatarId = currentProfile.avatarId,
-                                avatarSize = 150.dp,
-                                ringGap = 12.dp,
-                                ringBorderWidth = 0.5.dp,
-                                ringColor = Color.White.copy(alpha = 0.16f),
-                                onClick = {
-                                    editingProfile = currentProfile
-                                    isCreatingNew = false
+                        } else {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center,
+                                modifier = Modifier.graphicsLayer {
+                                    alpha = heroAlpha
+                                    scaleX = heroScale
+                                    scaleY = heroScale
                                 }
-                            )
+                            ) {
+                                // Large avatar: 150 dp, thin ring: 0.5 px white at 16%, 12 dp gap (outer size 174 dp)
+                                AvatarWithThinRing(
+                                    avatarId = currentProfile.avatarId,
+                                    avatarSize = 150.dp,
+                                    ringGap = 12.dp,
+                                    ringBorderWidth = 0.5.dp,
+                                    ringColor = Color.White.copy(alpha = 0.16f),
+                                    onClick = {
+                                        editingProfile = currentProfile
+                                        isCreatingNew = false
+                                    }
+                                )
 
-                            Spacer(modifier = Modifier.height(22.dp))
+                                Spacer(modifier = Modifier.height(22.dp))
 
-                            // Profile Name: 30 sp medium, slightly negative letter spacing
-                            Text(
-                                text = currentProfile.name,
-                                style = TextStyle(
-                                    fontFamily = AppFontFamily,
-                                    fontWeight = FontWeight.Medium,
-                                    fontSize = 30.sp,
-                                    lineHeight = 32.sp,
-                                    letterSpacing = (-0.02).sp,
-                                    color = Color.White
-                                ),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                                // Profile Name: 30 sp medium, slightly negative letter spacing
+                                Text(
+                                    text = currentProfile.name,
+                                    style = TextStyle(
+                                        fontFamily = AppFontFamily,
+                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 30.sp,
+                                        lineHeight = 32.sp,
+                                        letterSpacing = (-0.02).sp,
+                                        color = Color.White
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
 
-                            Spacer(modifier = Modifier.height(10.dp))
+                                Spacer(modifier = Modifier.height(10.dp))
 
-                            // Neutral Role Chip: 22 dp tall, 8 dp radius, 11 sp text
-                            ProfileGlassChip(
-                                text = if (currentProfile.isKids) "Kids" else currentProfile.type.displayName,
-                                showLockIcon = currentProfile.isPinLocked
-                            )
+                                // Neutral Role Chip: 22 dp tall, 8 dp radius, 11 sp text
+                                ProfileGlassChip(
+                                    text = if (currentProfile.isKids) "Kids" else currentProfile.type.displayName,
+                                    showLockIcon = currentProfile.isPinLocked
+                                )
 
-                            Spacer(modifier = Modifier.height(20.dp))
+                                Spacer(modifier = Modifier.height(20.dp))
 
-                            // "Edit profile" Glass Pill: 44 dp tall, 24 dp horizontal padding, outline pencil icon + text
-                            ProfileGlassPill(
-                                text = "Edit profile",
-                                icon = Icons.Outlined.Edit,
-                                visualHeight = 44.dp,
-                                horizontalPadding = 24.dp,
-                                fontSize = 14,
-                                onClick = {
-                                    try {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    } catch (_: Exception) {}
-                                    editingProfile = currentProfile
-                                    isCreatingNew = false
-                                }
-                            )
+                                // "Edit profile" Glass Pill: 44 dp tall, 24 dp horizontal padding, outline pencil icon + text
+                                ProfileGlassPill(
+                                    text = "Edit profile",
+                                    icon = Icons.Outlined.Edit,
+                                    visualHeight = 44.dp,
+                                    horizontalPadding = 24.dp,
+                                    fontSize = 14,
+                                    onClick = {
+                                        try {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        } catch (_: Exception) {}
+                                        editingProfile = currentProfile
+                                        isCreatingNew = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -367,7 +460,8 @@ fun ProfileManagementSheet(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 40.dp)
+                        .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false)
+                        .padding(bottom = if (windowDims.isCompactHeight) 14.dp else 40.dp)
                         .graphicsLayer {
                             translationY = dockOffsetY.value
                             alpha = dockAlpha

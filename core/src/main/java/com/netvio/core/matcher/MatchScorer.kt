@@ -352,25 +352,28 @@ object MatchScorer {
         }.toSet()
 
         // 1b. Separate filename / release candidate from UI metadata description
-        var filenameHint: String? = (rawReleaseTitle ?: magnetDn)?.takeIf { it.isNotBlank() }
+        val explicitFilename: String? = (rawReleaseTitle ?: magnetDn)?.takeIf { it.isNotBlank() }
+        var filenameHint: String? = explicitFilename
         if (filenameHint == null) {
             val descLines = listOfNotNull(streamTitle, streamDescription).flatMap { it.lines() }
             val mediaLine = descLines.firstOrNull { line ->
                 val l = line.trim()
                 val isGeneric = isGenericStreamLabel(l, scraperName, titleYearsOrNumbers)
-                !isGeneric && (
+                val looksLikeMedia = !isGeneric && (
                     l.endsWith(".mkv", ignoreCase = true) || l.endsWith(".mp4", ignoreCase = true) ||
                             l.endsWith(".avi", ignoreCase = true) || l.endsWith(".ts", ignoreCase = true) ||
                             Regex("""\bS\d{1,2}[\s._-]*E\d{1,3}\b""", RegexOption.IGNORE_CASE).containsMatchIn(l) ||
                             (Regex("""\b(?:2160p|1080p|720p|bluray|web-?dl|remux)\b""", RegexOption.IGNORE_CASE).containsMatchIn(l) &&
                              l.split(' ', '.', '_').filter { it.isNotBlank() }.size >= 3)
                 )
+                looksLikeMedia && hasTitleTokensBeyondTechSpecs(l)
             }
             filenameHint = mediaLine?.trim()
         }
         if (filenameHint == null && streamUrl != null && !streamUrl.startsWith("magnet:", ignoreCase = true)) {
             try {
-                val path = java.net.URI(streamUrl).path
+                val safeUriStr = com.netvio.core.network.PlayerPlaybackNetworking.sanitizeHttpStreamUrl(streamUrl)
+                val path = java.net.URI(safeUriStr).path
                 val lastSeg = path?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
                 if (lastSeg != null && (lastSeg.endsWith(".mkv", ignoreCase = true) || lastSeg.endsWith(".mp4", ignoreCase = true) ||
                         lastSeg.contains("1080p", ignoreCase = true) || lastSeg.contains("2160p", ignoreCase = true))) {
@@ -436,8 +439,21 @@ object MatchScorer {
             )
         }
 
-        // Use filenameHint (or streamTitle) for release parsing so description metadata never pollutes title comparison!
-        val releaseCandidate = filenameHint ?: streamTitle ?: candidateText
+        val cleanMultiLineStreamTitle = if (filenameHint == null && !streamTitle.isNullOrBlank()) {
+            streamTitle.lineSequence()
+                .map { it.trim() }
+                .firstOrNull { line ->
+                    line.isNotBlank() &&
+                        !isGenericStreamLabel(line, scraperName, titleYearsOrNumbers) &&
+                        hasTitleTokensBeyondTechSpecs(line)
+                }
+                ?: streamTitle
+        } else {
+            streamTitle
+        }
+
+        // Use filenameHint (or cleaned first title line of streamTitle) for release parsing so description metadata never pollutes title comparison!
+        val releaseCandidate = filenameHint ?: cleanMultiLineStreamTitle ?: candidateText
 
         // 3. Multi-Episode Ranges & Season Packs Detection
         val rangeMatch = Regex("""\bS(\d{1,2})[\s._-]*E(\d{1,3})\s*[-~]\s*E?(\d{1,3})\b""", RegexOption.IGNORE_CASE).find(releaseCandidate)
@@ -712,6 +728,20 @@ object MatchScorer {
             }
         }
         return stripped.length < 3
+    }
+
+    private fun hasTitleTokensBeyondTechSpecs(raw: String): Boolean {
+        val cleaned = raw.lowercase()
+            .replace(Regex("""\b(?:2160p?|1440p?|1080p?|720p?|576p?|480p?|360p?|4k|2k|uhd|fhd|hd|sd|cam|ts|hdts|hdrip)\b"""), " ")
+            .replace(Regex("""\b(?:web-?dl|webrip|bluray|blu-ray|bdrip|brrip|dvdrip|remux|hdtv|dash|hls|m3u8|mkv|mp4|avi|ts)\b"""), " ")
+            .replace(Regex("""\b(?:hdr10\+?|hdr|hlg|dovi|dolby\s*vision|dv|sdr|10bit|8bit|hevc|avc|av1|vp9|[hx]\.?265|[hx]\.?264)\b"""), " ")
+            .replace(Regex("""\b(?:ddp\d*(?:\.\d)?|dd\+?|dts-?hd(?:\s*ma)?|dts|atmos|truehd|eac3|ac3|aac|flac|opus|mp3|multi|dual\s*audio)\b"""), " ")
+            .replace(Regex("""(?:~?\d+(?:\.\d+)?\s*(?:gbps|mbps|kbps|gb|mb|gib|mib|kb|kib|fps|hz|ch))"""), " ")
+            .replace(Regex("""\b(?:source|audio|subtitles?|lang|server|mirror)\s*:"""), " ")
+            .replace(Regex("""[^\p{L}\p{Nd}\s]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+        return cleaned.length >= 2
     }
 
     fun filterAndRankStreams(

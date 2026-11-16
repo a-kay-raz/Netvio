@@ -73,6 +73,8 @@ import com.netvio.ui.theme.NetvioGlassTokens
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.LocalReduceMotion
 import com.netvio.ui.theme.netvioGlassCard
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
+import com.netvio.ui.theme.rememberWindowDimensions
 import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.launch
 
@@ -187,11 +189,13 @@ fun TraktConnectDialog(
             contentAlignment = Alignment.Center
         ) {
             // Dialog Card
+            val windowDims = rememberWindowDimensions()
             Box(
                 modifier = Modifier
+                    .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false)
                     .widthIn(max = 410.dp)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
+                    .heightIn(max = windowDims.dialogMaxHeight())
                     .imePadding()
                     .graphicsLayer {
                         scaleX = cardScale
@@ -784,11 +788,13 @@ fun SimklConnectDialog(
             contentAlignment = Alignment.Center
         ) {
             // Dialog Card
+            val windowDims = rememberWindowDimensions()
             Box(
                 modifier = Modifier
+                    .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false)
                     .widthIn(max = 410.dp)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
+                    .heightIn(max = windowDims.dialogMaxHeight())
                     .imePadding()
                     .graphicsLayer {
                         scaleX = cardScale

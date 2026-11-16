@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -77,6 +78,9 @@ import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.NetvioGlassTokens
 import com.netvio.ui.theme.LocalReduceMotion
 import com.netvio.ui.theme.pressable
+import com.netvio.ui.theme.LocalNavigationLayout
+import com.netvio.ui.theme.LocalWindowDimensions
+import com.netvio.ui.theme.rememberAdaptiveHorizontalPadding
 import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.delay
 import java.util.Locale
@@ -118,12 +122,27 @@ fun SavedWallTab(
         }
     }
 
+    val windowDimensions = LocalWindowDimensions.current
+    val navLayout = LocalNavigationLayout.current
+    val gridColumns = windowDimensions.posterGridColumns(
+        minItemWidth = 155.dp,
+        gap = 12.dp,
+        minCols = 2,
+        maxCols = 6,
+        reservedStartDp = navLayout.sideRailStartClearance
+    )
+
     LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Fixed(gridColumns),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 110.dp),
+        contentPadding = rememberAdaptiveHorizontalPadding(
+            baseStart = windowDimensions.horizontalMargin,
+            baseEnd = windowDimensions.horizontalMargin,
+            top = 8.dp,
+            bottom = navLayout.recommendedBottomContentPadding
+        ),
         modifier = modifier.fillMaxSize()
     ) {
         // 1. Filter Row: Sort dropdown left, Offline-only toggle right (visible when items or continue watching exists)
@@ -247,23 +266,27 @@ fun SavedWallTab(
                     span = { GridItemSpan(maxLineSpan) }
                 ) {
                     val matchingDl = downloadsMap[continueWatchingItem.mediaId]
-                    ContinueWatchingCard(
-                        historyItem = continueWatchingItem,
-                        downloadItem = matchingDl,
-                        onPlay = { onPlayHistoryItem(continueWatchingItem) },
-                        onCardClick = {
-                            if (onHistoryItemClick != null) {
-                                onHistoryItemClick(continueWatchingItem)
-                            } else {
-                                val matchingItem = items.firstOrNull { it.mediaId == continueWatchingItem.mediaId }
-                                if (matchingItem != null) {
-                                    onItemClick(matchingItem)
-                                } else {
-                                    onPlayHistoryItem(continueWatchingItem)
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        Box(modifier = Modifier.widthIn(max = 580.dp)) {
+                            ContinueWatchingCard(
+                                historyItem = continueWatchingItem,
+                                downloadItem = matchingDl,
+                                onPlay = { onPlayHistoryItem(continueWatchingItem) },
+                                onCardClick = {
+                                    if (onHistoryItemClick != null) {
+                                        onHistoryItemClick(continueWatchingItem)
+                                    } else {
+                                        val matchingItem = items.firstOrNull { it.mediaId == continueWatchingItem.mediaId }
+                                        if (matchingItem != null) {
+                                            onItemClick(matchingItem)
+                                        } else {
+                                            onPlayHistoryItem(continueWatchingItem)
+                                        }
+                                    }
                                 }
-                            }
+                            )
                         }
-                    )
+                    }
                 }
             }
 

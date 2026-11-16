@@ -217,7 +217,8 @@ private fun HeroMetadataChipsLayout(
         }
     }
 
-    val isUsingHaze = hazeState != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val uiBlurEnabled = com.netvio.ui.theme.LocalUiBlurEnabled.current
+    val isUsingHaze = uiBlurEnabled && hazeState != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
     Box(modifier = modifier) {
         // Unified Frosted Glass Blur Background Layer

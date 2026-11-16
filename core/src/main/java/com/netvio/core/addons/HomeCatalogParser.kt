@@ -56,11 +56,17 @@ object HomeCatalogParser {
                 val meta = element as? JsonObject ?: continue
                 val id = meta.string("id")
                 val typeStr = meta.string("type") ?: "movie"
-                val name = meta.string("name") ?: meta.string("title")
+                val rawName = meta.string("name") ?: meta.string("title")
+                val posterPreview = meta.string("poster")
 
-                if (id.isNullOrBlank() || name.isNullOrBlank()) {
+                if (id.isNullOrBlank() || rawName.isNullOrBlank()) {
                     continue
                 }
+                val cleanName = rawName.replace('\u2800', ' ').trim()
+                if (cleanName.isBlank() && posterPreview.isNullOrBlank()) {
+                    continue
+                }
+                val name = cleanName
 
                 val hintsObj = meta["behaviorHints"] as? JsonObject
                 val isLiveHint = hintsObj?.boolean("isLive") == true ||

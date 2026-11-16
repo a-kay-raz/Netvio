@@ -29,6 +29,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -78,7 +81,10 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.netvio.ui.components.AppAsyncImage
+import com.netvio.ui.theme.Dimens
+import com.netvio.ui.theme.LocalWindowDimensions
 import com.netvio.ui.theme.ShapeFull
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
 import com.netvio.ui.theme.pressable
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -189,9 +195,13 @@ fun TrailerCardSheet(
             progress = animProgress
         )
 
+        val windowDimensions = LocalWindowDimensions.current
+
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .adaptiveHorizontalSafePadding(includeRailClearance = false)
+                .widthIn(max = Dimens.maxSheetWidth)
                 .fillMaxWidth()
                 .heightIn(max = maxHeight)
                 .offset { IntOffset(0, totalOffsetY.roundToInt()) }
@@ -230,6 +240,7 @@ fun TrailerCardSheet(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .navigationBarsPadding()
                     .padding(bottom = 16.dp)
             ) {
@@ -241,6 +252,7 @@ fun TrailerCardSheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp)
+                        .heightIn(max = if (windowDimensions.isCompactHeight) 180.dp else 320.dp)
                         .aspectRatio(16f / 9f)
                         .clip(RoundedCornerShape(16.dp))
                         .border(

@@ -67,11 +67,13 @@ fun InPluginSearchOverlay(
     var isLoading by remember { mutableStateOf(false) }
     var searchJob by remember { mutableStateOf<Job?>(null) }
     val windowDimensions = rememberWindowDimensions()
-    val gridColumns = when (windowDimensions.widthClass) {
-        WindowWidthClass.Expanded -> 6
-        WindowWidthClass.Medium -> 5
-        WindowWidthClass.Compact -> 3
-    }
+    val navLayout = LocalNavigationLayout.current
+    val gridColumns = windowDimensions.posterGridColumns(
+        minItemWidth = 115.dp,
+        minCols = 3,
+        maxCols = 6,
+        reservedStartDp = navLayout.sideRailStartClearance
+    )
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
@@ -108,7 +110,11 @@ fun InPluginSearchOverlay(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = windowDimensions.horizontalMargin)
+                .adaptiveHorizontalSafePadding(
+                    baseStart = windowDimensions.horizontalMargin,
+                    baseEnd = windowDimensions.horizontalMargin,
+                    includeRailClearance = false
+                )
         ) {
             // Search Input Header Bar
             Row(

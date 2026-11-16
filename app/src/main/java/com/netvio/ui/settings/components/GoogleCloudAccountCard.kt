@@ -68,6 +68,7 @@ fun GoogleCloudAccountCard(
 
     val session by syncManager.sessionFlow.collectAsState()
     val syncStatus by syncManager.syncStatus.collectAsState()
+    val syncErrorMessage by syncManager.syncErrorMessage.collectAsState()
     val lastSyncTs by syncManager.lastSyncTimestamp.collectAsState()
 
     val syncPlayback by prefs.supabaseSyncPlayback.collectAsState(initial = true)
@@ -214,7 +215,7 @@ fun GoogleCloudAccountCard(
                                 isConnecting = false
                                 if (res.isFailure) {
                                     val err = res.exceptionOrNull()?.message ?: "Sign in failed"
-                                    Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, err, Toast.LENGTH_LONG).show()
                                 }
                             }
                         }
@@ -362,16 +363,32 @@ fun GoogleCloudAccountCard(
                                 else -> formatRelativeTime(lastSyncTs)
                             }
 
-                            Text(
-                                text = statusText,
-                                style = TextStyle(
-                                    fontFamily = AppFontFamily,
-                                    fontWeight = FontWeight.Normal,
-                                    fontSize = 11.sp,
-                                    lineHeight = 14.sp,
-                                    color = if (syncStatus == SyncStatus.ERROR) Color(0xFFFF8A80) else Color.White.copy(alpha = 0.65f)
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = statusText,
+                                    style = TextStyle(
+                                        fontFamily = AppFontFamily,
+                                        fontWeight = FontWeight.Normal,
+                                        fontSize = 11.sp,
+                                        lineHeight = 14.sp,
+                                        color = if (syncStatus == SyncStatus.ERROR) Color(0xFFFF8A80) else Color.White.copy(alpha = 0.65f)
+                                    )
                                 )
-                            )
+                                if (syncStatus == SyncStatus.ERROR && !syncErrorMessage.isNullOrBlank()) {
+                                    Text(
+                                        text = syncErrorMessage.orEmpty(),
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = TextStyle(
+                                            fontFamily = AppFontFamily,
+                                            fontWeight = FontWeight.Normal,
+                                            fontSize = 10.sp,
+                                            lineHeight = 13.sp,
+                                            color = Color(0xFFFF8A80).copy(alpha = 0.85f)
+                                        )
+                                    )
+                                }
+                            }
                         }
                     }
 

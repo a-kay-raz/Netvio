@@ -23,11 +23,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Backspace
 import androidx.compose.material3.Icon
@@ -51,6 +55,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -63,6 +68,9 @@ import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.NetvioGlassTokens
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.LocalReduceMotion
+import com.netvio.ui.theme.Dimens
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
+import com.netvio.ui.theme.rememberWindowDimensions
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -138,7 +146,8 @@ fun PinDots(
 fun PinKeypad(
     onDigitClick: (String) -> Unit,
     onBackspaceClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    buttonSize: Dp = 64.dp
 ) {
     val haptic = LocalHapticFeedback.current
     val keypadRows = remember {
@@ -151,7 +160,7 @@ fun PinKeypad(
     }
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(if (buttonSize < 60.dp) 8.dp else 12.dp),
         modifier = modifier.fillMaxWidth()
     ) {
         keypadRows.forEach { row ->
@@ -162,10 +171,11 @@ fun PinKeypad(
                 row.forEach { digit ->
                     when (digit) {
                         "" -> {
-                            Box(modifier = Modifier.size(64.dp))
+                            Box(modifier = Modifier.size(buttonSize))
                         }
                         "DEL" -> {
                             KeypadButton(
+                                buttonSize = buttonSize,
                                 onClick = {
                                     try {
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -177,12 +187,13 @@ fun PinKeypad(
                                     imageVector = Icons.AutoMirrored.Outlined.Backspace,
                                     contentDescription = "Backspace",
                                     tint = Color.White.copy(alpha = 0.70f),
-                                    modifier = Modifier.size(22.dp)
+                                    modifier = Modifier.size(if (buttonSize < 60.dp) 18.dp else 22.dp)
                                 )
                             }
                         }
                         else -> {
                             KeypadButton(
+                                buttonSize = buttonSize,
                                 onClick = {
                                     try {
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -195,7 +206,7 @@ fun PinKeypad(
                                     style = TextStyle(
                                         fontFamily = AppFontFamily,
                                         fontWeight = FontWeight.Normal,
-                                        fontSize = 22.sp,
+                                        fontSize = if (buttonSize < 60.dp) 19.sp else 22.sp,
                                         color = Color.White
                                     )
                                 )
@@ -211,6 +222,7 @@ fun PinKeypad(
 @Composable
 private fun KeypadButton(
     onClick: () -> Unit,
+    buttonSize: Dp = 64.dp,
     content: @Composable () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -227,7 +239,7 @@ private fun KeypadButton(
 
     Box(
         modifier = Modifier
-            .size(64.dp)
+            .size(buttonSize)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -360,9 +372,13 @@ fun PinChallengeDialog(
                 ),
             contentAlignment = Alignment.Center
         ) {
+            val windowDims = rememberWindowDimensions()
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.90f)
+                    .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false)
+                    .widthIn(max = Dimens.maxDialogWidth)
+                    .fillMaxWidth()
+                    .heightIn(max = windowDims.dialogMaxHeight())
                     .graphicsLayer {
                         alpha = animVal
                         scaleX = cardScale
@@ -391,10 +407,12 @@ fun PinChallengeDialog(
                         indication = null,
                         onClick = {} // block click through
                     )
-                    .padding(24.dp)
+                    .padding(if (windowDims.isCompactHeight) 18.dp else 24.dp)
             ) {
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     // Profile Avatar with thin white hairline ring
@@ -440,14 +458,15 @@ fun PinChallengeDialog(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(24.dp))
+                    Spacer(modifier = Modifier.height(if (windowDims.isCompactHeight) 14.dp else 24.dp))
 
                     PinKeypad(
                         onDigitClick = ::onDigitPress,
-                        onBackspaceClick = ::onBackspacePress
+                        onBackspaceClick = ::onBackspacePress,
+                        buttonSize = if (windowDims.isCompactHeight) 50.dp else 64.dp
                     )
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(if (windowDims.isCompactHeight) 12.dp else 16.dp))
 
                     ProfileGlassPill(
                         text = "Cancel",
@@ -589,9 +608,13 @@ fun PinCreatorDialog(
                 ),
             contentAlignment = Alignment.Center
         ) {
+            val windowDims = rememberWindowDimensions()
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.90f)
+                    .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false)
+                    .widthIn(max = if (windowDims.isCompactHeight) 560.dp else Dimens.maxDialogWidth)
+                    .fillMaxWidth()
+                    .heightIn(max = windowDims.dialogMaxHeight())
                     .graphicsLayer {
                         alpha = animVal
                         scaleX = cardScale
@@ -620,10 +643,12 @@ fun PinCreatorDialog(
                         indication = null,
                         onClick = {}
                     )
-                    .padding(24.dp)
+                    .padding(if (windowDims.isCompactHeight) 18.dp else 24.dp)
             ) {
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     AnimatedContent(
@@ -669,14 +694,15 @@ fun PinCreatorDialog(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(24.dp))
+                    Spacer(modifier = Modifier.height(if (windowDims.isCompactHeight) 14.dp else 24.dp))
 
                     PinKeypad(
                         onDigitClick = ::onDigitPress,
-                        onBackspaceClick = ::onBackspacePress
+                        onBackspaceClick = ::onBackspacePress,
+                        buttonSize = if (windowDims.isCompactHeight) 50.dp else 64.dp
                     )
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(if (windowDims.isCompactHeight) 12.dp else 16.dp))
 
                     ProfileGlassPill(
                         text = "Cancel",

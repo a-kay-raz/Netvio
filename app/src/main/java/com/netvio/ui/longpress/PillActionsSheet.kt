@@ -28,7 +28,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.filled.PlaylistAdd
@@ -58,8 +61,11 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.netvio.ui.components.AppAsyncImage
+import com.netvio.ui.theme.Dimens
 import com.netvio.ui.theme.GlassDefaults
+import com.netvio.ui.theme.LocalWindowDimensions
 import com.netvio.ui.theme.ShapeFull
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
 import com.netvio.ui.theme.pressable
 import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.launch
@@ -154,26 +160,16 @@ fun PillActionsSheet(
             hazeState = hazeState
         )
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // 2. Poster + Title + Meta vertically centered in free space
+        val windowDimensions = LocalWindowDimensions.current
+        val posterBlock: @Composable (Modifier) -> Unit = { blockModifier ->
             Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
+                modifier = blockModifier,
                 contentAlignment = Alignment.Center
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
-                        .padding(bottom = 12.dp)
+                        .padding(bottom = if (windowDimensions.isCompactHeight) 0.dp else 12.dp)
                         .graphicsLayer {
                             scaleX = 0.88f + 0.12f * animProgress
                             scaleY = 0.88f + 0.12f * animProgress
@@ -182,10 +178,12 @@ fun PillActionsSheet(
                         }
                 ) {
                     val cleanTitle = remember(item.title) { sanitizeTitle(item.title) }
-                    // Poster: 140 x 210 dp, 8 dp corners with depth shadow
+                    val posterW = if (windowDimensions.isCompactHeight) 96.dp else 140.dp
+                    val posterH = if (windowDimensions.isCompactHeight) 144.dp else 210.dp
+                    // Poster with depth shadow
                     Box(
                         modifier = Modifier
-                            .size(width = 140.dp, height = 210.dp)
+                            .size(width = posterW, height = posterH)
                             .shadow(
                                 elevation = 16.dp,
                                 shape = RoundedCornerShape(8.dp),
@@ -204,12 +202,12 @@ fun PillActionsSheet(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(if (windowDimensions.isCompactHeight) 8.dp else 14.dp))
 
                     // Centered Title (20 sp medium)
                     Text(
                         text = cleanTitle,
-                        fontSize = 20.sp,
+                        fontSize = if (windowDimensions.isCompactHeight) 17.sp else 20.sp,
                         fontWeight = FontWeight.Medium,
                         color = LongPressPrimaryText,
                         textAlign = TextAlign.Center,
@@ -224,11 +222,11 @@ fun PillActionsSheet(
                     MetaRow(item = item)
                 }
             }
+        }
 
-            // 3. Bottom Action Stack
+        val actionStackBlock: @Composable (Modifier) -> Unit = { stackModifier ->
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
+                modifier = stackModifier
                     .graphicsLayer {
                         translationY = (1f - animProgress) * 60f + dragOffsetY
                         alpha = animProgress.coerceIn(0f, 1f)
@@ -379,6 +377,38 @@ fun PillActionsSheet(
                             modifier = Modifier.size(12.dp)
                         )
                     }
+                }
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false)
+                .padding(bottom = 16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (windowDimensions.isCompactHeight) {
+                Row(
+                    modifier = Modifier
+                        .widthIn(max = 760.dp)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    posterBlock(Modifier.weight(0.45f))
+                    actionStackBlock(Modifier.weight(0.55f).widthIn(max = 420.dp))
+                }
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    posterBlock(Modifier.weight(1f).fillMaxWidth())
+                    actionStackBlock(Modifier.widthIn(max = Dimens.maxSheetWidth).fillMaxWidth())
                 }
             }
         }

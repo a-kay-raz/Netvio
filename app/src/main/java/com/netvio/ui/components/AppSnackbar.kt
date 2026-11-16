@@ -146,6 +146,7 @@ fun AppSnackbar(
 ) {
     Row(
         modifier = modifier
+            .widthIn(max = 460.dp)
             .fillMaxWidth()
             .clip(ShapeM)
             .background(SurfaceMid)
@@ -220,7 +221,8 @@ fun AppSnackbarHost(
         modifier = modifier
             .fillMaxSize()
             .navigationBarsPadding()
-            .padding(bottom = bottomPadding, start = Dimens.spacing16, end = Dimens.spacing16),
+            .adaptiveHorizontalSafePadding(baseStart = Dimens.spacing16, baseEnd = Dimens.spacing16)
+            .padding(bottom = bottomPadding),
         contentAlignment = Alignment.BottomCenter
     ) {
         AnimatedVisibility(

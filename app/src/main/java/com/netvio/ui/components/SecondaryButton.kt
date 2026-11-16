@@ -51,8 +51,9 @@ fun SecondaryButton(
     fontWeight: FontWeight = FontWeight.SemiBold,
     hazeState: HazeState? = null,
 ) {
+    val uiBlurEnabled = com.netvio.ui.theme.LocalUiBlurEnabled.current
     val backgroundModifier = if (hazeState != null) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (uiBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             Modifier.hazeEffect(state = hazeState) {
                 blurRadius = GlassDefaults.BlurRadius
                 tints = listOf(HazeTint(GlassDefaults.TintColor))

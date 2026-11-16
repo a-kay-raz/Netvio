@@ -161,10 +161,21 @@ object AddonMetaParser {
                 rawType.equals("livestream", ignoreCase = true) ||
                 (rawType.equals("tv", ignoreCase = true) && !isVodId && videosArr.isEmpty())
 
+            val hasEpisodeVideos = !isLiveTv && (
+                videosArr.size > 1 ||
+                videosArr.any { v ->
+                    v.int("episode") != null ||
+                        v.int("number") != null ||
+                        v.int("season") != null ||
+                        ((v.string("id")?.trim()?.equals(id, ignoreCase = true) == false) && defaultVideoId == null)
+                }
+            )
+
             val mediaType = when {
                 isLiveTv -> MediaType.LIVE_TV
                 rawType.equals("series", ignoreCase = true) || rawType.equals("tv", ignoreCase = true) -> MediaType.TV_SERIES
                 rawType.equals("anime", ignoreCase = true) -> MediaType.ANIME
+                hasEpisodeVideos -> MediaType.TV_SERIES
                 else -> MediaType.MOVIE
             }
 

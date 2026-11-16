@@ -57,10 +57,16 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import com.netvio.ui.settings.plugins.pluginsPressable
-import com.netvio.ui.theme.NetvioGlassTokens
+import com.netvio.ui.theme.Dimens
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.LocalReduceMotion
+import com.netvio.ui.theme.NetvioGlassTokens
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
+import com.netvio.ui.theme.rememberWindowDimensions
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -100,6 +106,7 @@ fun NetvioGlassDialog(
     val haptic = LocalHapticFeedback.current
     val cancelFocusRequester = remember { FocusRequester() }
     val isAmoled = LocalAmoledMode.current
+    val uiBlurEnabled = com.netvio.ui.theme.LocalUiBlurEnabled.current
     val reduceMotion = LocalReduceMotion.current
     var isVisible by remember { mutableStateOf(reduceMotion) }
 
@@ -134,20 +141,7 @@ fun NetvioGlassDialog(
             usePlatformDefaultWidth = false
         )
     ) {
-        val view = LocalView.current
-        SideEffect {
-            val window = (view.parent as? DialogWindowProvider)?.window
-                ?: generateSequence(view.parent) { it.parent }
-                    .filterIsInstance<DialogWindowProvider>()
-                    .firstOrNull()?.window
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && window != null) {
-                window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
-                window.setDimAmount(0f)
-                val lp = window.attributes
-                lp.blurBehindRadius = 45
-                window.attributes = lp
-            }
-        }
+        com.netvio.ui.theme.ApplyWindowBlurEffect(enabled = uiBlurEnabled, blurRadiusPx = 48)
 
         val cardShape = RoundedCornerShape(NetvioGlassTokens.RadiusDialog)
         val cardFill = NetvioGlassTokens.cardFill(isAmoled)
@@ -166,11 +160,13 @@ fun NetvioGlassDialog(
             contentAlignment = Alignment.Center
         ) {
             // Dialog card: max 380dp, 16dp horizontal margin, 28dp radius, 24dp inner padding
+            val windowDims = rememberWindowDimensions()
             Box(
                 modifier = modifier
-                    .widthIn(max = 380.dp)
+                    .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false)
+                    .widthIn(max = Dimens.maxDialogWidth)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
+                    .heightIn(max = windowDims.dialogMaxHeight())
                     .graphicsLayer {
                         scaleX = cardScale
                         scaleY = cardScale
@@ -183,7 +179,7 @@ fun NetvioGlassDialog(
                     )
                     .clip(cardShape)
                     .then(
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        if (uiBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                             if (hazeState != null) {
                                 Modifier.hazeEffect(state = hazeState) {
                                     blurRadius = NetvioGlassTokens.BlurRadius
@@ -205,7 +201,9 @@ fun NetvioGlassDialog(
                     .padding(24.dp)
             ) {
                 Column(
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
                 ) {
                     // Optional Icon Tile: 44x44dp, 13dp radius, 22dp icon
                     if (icon != null) {

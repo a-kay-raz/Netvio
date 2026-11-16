@@ -127,6 +127,7 @@ fun Modifier.pressScale(
 
 val LocalReduceMotion = compositionLocalOf { false }
 val LocalAmoledMode = compositionLocalOf { true }
+val LocalUiBlurEnabled = compositionLocalOf { true }
 
 /**
  * Standard pressable modifier for consumer-grade streaming UI (recoil scale 0.96, alpha 1.0, tuned spring, haptics).

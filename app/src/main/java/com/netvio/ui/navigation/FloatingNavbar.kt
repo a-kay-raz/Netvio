@@ -18,15 +18,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.selection.selectable
@@ -57,6 +61,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
@@ -531,11 +536,12 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGlassLens(
 private fun Modifier.frostedGlassSurface(
     shape: Shape,
     hazeState: HazeState?
-): Modifier {
-    return this
+): Modifier = composed {
+    val uiBlurEnabled = com.netvio.ui.theme.LocalUiBlurEnabled.current
+    this
         .clip(shape)
         .then(
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
+            if (uiBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
                 Modifier.hazeEffect(state = hazeState) {
                     blurRadius = GlassDefaults.BlurRadius
                     tints = listOf(HazeTint(GlassDefaults.TintColor))
@@ -586,81 +592,320 @@ private fun Modifier.frostedGlassSurface(
 }
 
 /**
- * Adaptive Navigation Rail for Tablet, Foldable, Desktop, and TV environments.
+ * Computes the horizontal start clearance needed by screen content when [FrostedNavigationRail]
+ * is overlaid on the start edge, including system cutout/navigation bar insets on that edge.
+ */
+fun calculateSideRailStartClearance(
+    style: NavbarStyle,
+    isCompactHeight: Boolean,
+    leftSysInset: androidx.compose.ui.unit.Dp
+): androidx.compose.ui.unit.Dp {
+    val railBodyWidth = when (style) {
+        NavbarStyle.FLOATING -> if (isCompactHeight) Dimens.navRailWidthCompact else Dimens.navRailTabletFloatingWidth
+        NavbarStyle.DOCKED -> if (isCompactHeight) Dimens.navRailWidthCompact else Dimens.navRailWidthTablet
+    }
+    val outerGap = if (style == NavbarStyle.FLOATING) Dimens.navRailOuterMargin else 0.dp
+    return leftSysInset + outerGap + railBodyWidth
+}
+
+/**
+ * Apple Liquid Glass Navigation Rail for Tablets, Foldables, Landscape Phones, and TV.
+ * Matches [FloatingNavbar]'s exact 5-layer optical glass surface, sliding liquid glass capsule lens,
+ * AMOLED true-black awareness, UI blur toggle support, display-cutout safety, and scroll-to-hide.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+fun FrostedNavigationRail(
+    currentRoute: String,
+    onTabSelected: (NavTab) -> Unit,
+    onTabReselected: ((NavTab) -> Unit)? = null,
+    style: NavbarStyle = NavbarStyle.FLOATING,
+    isCompactHeight: Boolean = false,
+    isVisible: Boolean = true,
+    modifier: Modifier = Modifier
+) {
+    val hazeState = LocalNavbarHazeState.current
+    val reduceMotion = LocalReduceMotion.current
+    val effectivelyVisible = style == NavbarStyle.DOCKED || isVisible
+
+    val layoutDirection = LocalLayoutDirection.current
+    val horizontalInsets = WindowInsets.displayCutout.union(WindowInsets.navigationBars).asPaddingValues()
+    val leftSysInset = horizontalInsets.calculateLeftPadding(layoutDirection)
+    val railBodyWidth = when (style) {
+        NavbarStyle.FLOATING -> if (isCompactHeight) Dimens.navRailWidthCompact else Dimens.navRailTabletFloatingWidth
+        NavbarStyle.DOCKED -> if (isCompactHeight) Dimens.navRailWidthCompact else Dimens.navRailWidthTablet
+    }
+    val hideDistance = leftSysInset + Dimens.navRailOuterMargin + railBodyWidth + 24.dp
+
+    val railOffsetX by animateDpAsState(
+        targetValue = if (effectivelyVisible) 0.dp else -hideDistance,
+        animationSpec = if (reduceMotion) {
+            snap()
+        } else if (effectivelyVisible) {
+            spring(dampingRatio = 0.82f, stiffness = 380f)
+        } else {
+            spring(dampingRatio = 0.88f, stiffness = 420f)
+        },
+        label = "railScrollOffsetX"
+    )
+
+    val tabs = NavTab.entries
+    val normalizedRoute = normalizeNavTabRoute(currentRoute)
+    val selectedIndex = tabs.indexOfFirst { it.route == normalizedRoute }.coerceAtLeast(0)
+
+    val shape = when (style) {
+        NavbarStyle.FLOATING -> RoundedCornerShape(24.dp)
+        NavbarStyle.DOCKED -> RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp)
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .graphicsLayer {
+                val hidePx = hideDistance.toPx()
+                translationX = railOffsetX.toPx()
+                alpha = if (hidePx > 0f) (1f - (kotlin.math.abs(railOffsetX.toPx()) / hidePx)).coerceIn(0f, 1f) else 1f
+            },
+        contentAlignment = Alignment.CenterStart
+    ) {
+        val containerModifier = when (style) {
+            NavbarStyle.FLOATING -> {
+                Modifier
+                    .padding(start = leftSysInset + Dimens.navRailOuterMargin)
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(vertical = Dimens.spacing12)
+                    .width(railBodyWidth)
+                    .shadow(
+                        elevation = 16.dp,
+                        shape = shape,
+                        ambientColor = Color.Black.copy(alpha = 0.18f),
+                        spotColor = Color.Black.copy(alpha = 0.22f)
+                    )
+                    .frostedGlassSurface(
+                        shape = shape,
+                        hazeState = hazeState
+                    )
+            }
+            NavbarStyle.DOCKED -> {
+                Modifier
+                    .fillMaxHeight()
+                    .width(leftSysInset + railBodyWidth)
+                    .shadow(
+                        elevation = 8.dp,
+                        shape = shape,
+                        ambientColor = Color.Black.copy(alpha = 0.18f),
+                        spotColor = Color.Black.copy(alpha = 0.22f)
+                    )
+                    .frostedGlassSurface(
+                        shape = shape,
+                        hazeState = hazeState
+                    )
+                    .padding(start = leftSysInset)
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(vertical = Dimens.spacing12)
+            }
+        }
+
+        Box(
+            modifier = containerModifier,
+            contentAlignment = Alignment.Center
+        ) {
+            if (style == NavbarStyle.DOCKED && !isCompactHeight) {
+                Text(
+                    text = "N",
+                    style = AppTypography.titleLarge,
+                    fontWeight = FontWeight.Black,
+                    color = Color.White.copy(alpha = 0.88f),
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = Dimens.spacing12)
+                )
+            }
+
+            NavbarRailColumn(
+                tabs = tabs,
+                selectedIndex = selectedIndex,
+                tabSlotHeight = if (isCompactHeight) 54.dp else 64.dp,
+                showLabels = !isCompactHeight,
+                reduceMotion = reduceMotion,
+                style = style,
+                onTabSelected = onTabSelected,
+                onTabReselected = onTabReselected,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
+private fun NavbarRailColumn(
+    tabs: List<NavTab>,
+    selectedIndex: Int,
+    tabSlotHeight: androidx.compose.ui.unit.Dp,
+    showLabels: Boolean,
+    reduceMotion: Boolean,
+    style: NavbarStyle,
+    onTabSelected: (NavTab) -> Unit,
+    onTabReselected: ((NavTab) -> Unit)?,
+    modifier: Modifier = Modifier
+) {
+    val haptic = LocalHapticFeedback.current
+    val count = tabs.size
+    val totalHeight = tabSlotHeight * count
+
+    val indicatorIndex by animateFloatAsState(
+        targetValue = selectedIndex.toFloat(),
+        animationSpec = if (reduceMotion) {
+            snap()
+        } else {
+            spring(
+                dampingRatio = 0.76f,
+                stiffness = 420f
+            )
+        },
+        label = "railPillIndicator"
+    )
+
+    Box(
+        modifier = modifier.height(totalHeight)
+    ) {
+        // Vertical sliding Liquid Glass lens rendered in draw phase
+        Box(
+            Modifier
+                .matchParentSize()
+                .drawBehind {
+                    if (count == 0 || size.height <= 0f) return@drawBehind
+                    val tabH = size.height / count
+                    val t = indicatorIndex * tabH
+                    val b = t + tabH
+                    drawGlassLens(0f, t, size.width, b, style)
+                }
+        )
+
+        Column(
+            modifier = Modifier.matchParentSize(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            tabs.forEachIndexed { i, tab ->
+                val isSelected = i == selectedIndex
+                val interaction = remember { MutableInteractionSource() }
+                val pressed by interaction.collectIsPressedAsState()
+                val scale = animateFloatAsState(
+                    targetValue = if (pressed) NetvioMotionTokens.PressScaleCompact else 1f,
+                    animationSpec = if (reduceMotion) snap() else NetvioMotionTokens.SpringPress,
+                    label = "rail_press_${tab.name}"
+                )
+                val tint by animateColorAsState(
+                    targetValue = if (isSelected) Color(0xFF0B0B0F) else Color.White.copy(alpha = 0.50f),
+                    animationSpec = if (reduceMotion) snap() else tween(durationMillis = Motion.DurationMicro),
+                    label = "rail_tint_${tab.name}"
+                )
+
+                val tabOuterRadius = when (style) {
+                    NavbarStyle.FLOATING -> 24.dp
+                    NavbarStyle.DOCKED -> 16.dp
+                }
+                val tabInnerRadius = (tabOuterRadius - 4.dp).coerceAtLeast(0.dp)
+                val tabFocusShape = RoundedCornerShape(tabInnerRadius)
+
+                val activateTab: () -> Unit = {
+                    if (isSelected) {
+                        onTabReselected?.invoke(tab)
+                    } else {
+                        try {
+                            haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                        } catch (_: Exception) {}
+                        onTabSelected(tab)
+                    }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(tabSlotHeight)
+                        .graphicsLayer {
+                            scaleX = scale.value
+                            scaleY = scale.value
+                        }
+                        .semantics {
+                            this.role = Role.Tab
+                            this.selected = isSelected
+                        }
+                        .selectable(
+                            selected = isSelected,
+                            interactionSource = interaction,
+                            indication = null,
+                            role = Role.Tab,
+                            onClick = activateTab
+                        )
+                        .padding(horizontal = 4.dp, vertical = 4.dp)
+                        .tvFocusable(
+                            shape = tabFocusShape,
+                            focusedScale = 1.0f,
+                            onClick = activateTab
+                        ),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Box(
+                        modifier = Modifier.size(if (showLabels) 26.dp else 28.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = tab.iconSet.forState(isSelected),
+                            contentDescription = if (showLabels) null else tab.title,
+                            tint = tint,
+                            modifier = Modifier.size(if (showLabels) 22.dp else 23.dp)
+                        )
+                    }
+
+                    if (showLabels) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
+                        val effectiveFontSize = if (fontScale > 1.15f) {
+                            (10.5f / fontScale.coerceAtMost(1.35f)).sp
+                        } else {
+                            10.5.sp
+                        }
+                        Text(
+                            text = tab.title,
+                            color = tint,
+                            style = AppTypography.labelSmall,
+                            fontSize = effectiveFontSize,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Legacy wrapper preserved for source compatibility; delegates directly to [FrostedNavigationRail].
  */
 @Composable
 fun AdaptiveNavigationRail(
     currentRoute: String,
     onTabSelected: (NavTab) -> Unit,
     onTabReselected: ((NavTab) -> Unit)? = null,
+    style: NavbarStyle = NavbarStyle.FLOATING,
+    isCompactHeight: Boolean = false,
+    isVisible: Boolean = true,
     modifier: Modifier = Modifier
 ) {
-    val normalizedRoute = normalizeNavTabRoute(currentRoute)
-    Box(
+    FrostedNavigationRail(
+        currentRoute = currentRoute,
+        onTabSelected = onTabSelected,
+        onTabReselected = onTabReselected,
+        style = style,
+        isCompactHeight = isCompactHeight,
+        isVisible = isVisible,
         modifier = modifier
-            .width(Dimens.navRailWidth)
-            .fillMaxHeight()
-            .background(SurfaceLow)
-            .border(width = HairlineWidth, color = Outline)
-            .statusBarsPadding()
-            .navigationBarsPadding(),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxHeight()
-                .padding(vertical = Dimens.spacing24),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Dimens.spacing24)
-        ) {
-            Text(
-                text = "E",
-                style = AppTypography.titleLarge,
-                fontWeight = FontWeight.Black,
-                color = TextPrimary
-            )
-
-            Spacer(modifier = Modifier.height(Dimens.spacing16))
-
-            NavTab.entries.forEach { tab ->
-                val isSelected = normalizedRoute == tab.route
-
-                val iconTint by animateColorAsState(
-                    targetValue = if (isSelected) Color.Black else TextTertiary,
-                    animationSpec = tween(durationMillis = Motion.DurationMicro),
-                    label = "railIconTint_${tab.name}"
-                )
-
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(ShapeFull)
-                        .background(if (isSelected) Color.White else Color.Transparent)
-                        .semantics {
-                            this.role = Role.Tab
-                            this.selected = isSelected
-                        }
-                        .pressable(
-                            role = Role.Tab,
-                            onClick = {
-                                if (isSelected) {
-                                    onTabReselected?.invoke(tab)
-                                } else {
-                                    onTabSelected(tab)
-                                }
-                            }
-                        )
-                        .tvFocusable(shape = ShapeFull),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = tab.iconSet.outlined,
-                        contentDescription = tab.title,
-                        tint = iconTint,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            }
-        }
-    }
+    )
 }

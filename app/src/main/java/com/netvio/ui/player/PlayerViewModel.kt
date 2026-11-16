@@ -1785,8 +1785,10 @@ class PlayerViewModel(
                 if (localFile == null || !localFile.exists() || (!localFile.isDirectory && localFile.length() <= 0L)) {
                     try {
                         val dir = com.netvio.download.DownloadEngine(getApplication()).getDownloadDirectory()
+                        val safeId = com.netvio.download.DownloadEngine.sanitizeFileId(downloadedItem.id)
                         val candidate = dir.listFiles()?.firstOrNull { f ->
-                            f.name.contains(downloadedItem.id, ignoreCase = true) && !f.name.endsWith(".part") &&
+                            (f.name.contains(downloadedItem.id, ignoreCase = true) || f.name.contains(safeId, ignoreCase = true)) &&
+                                    !f.name.endsWith(".part") &&
                                     (if (f.isDirectory) java.io.File(f, "index.m3u8").exists() else f.length() > 0L)
                         }
                         if (candidate != null) {

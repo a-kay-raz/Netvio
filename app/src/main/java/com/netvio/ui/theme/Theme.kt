@@ -91,21 +91,29 @@ fun NetvioTheme(
         }
     }.collectAsState(initial = true)
 
+    val preferenceUiBlur by remember(context) {
+        try {
+            PreferencesRepository.getInstance(context.applicationContext).uiBlurEnabled
+        } catch (_: Exception) {
+            flowOf(true)
+        }
+    }.collectAsState(initial = true)
+
     val isAmoled = amoled ?: preferenceAmoled
     val colorScheme = if (isAmoled) DarkColorScheme.toAmoled() else DarkColorScheme
 
-    val surfaces = remember(isAmoled) {
+    val surfaces = remember(isAmoled, preferenceUiBlur) {
         if (isAmoled) {
             AppSurfaces(
                 scrim = androidx.compose.ui.graphics.Color(0xCC000000),
-                glassTint = androidx.compose.ui.graphics.Color(0xFA000000),
+                glassTint = if (preferenceUiBlur) androidx.compose.ui.graphics.Color(0xA607080C) else androidx.compose.ui.graphics.Color(0xF0050507),
                 outline = androidx.compose.ui.graphics.Color(0x33FFFFFF),
                 isAmoled = true
             )
         } else {
             AppSurfaces(
                 scrim = OverlayScrim,
-                glassTint = GlassSurfaceNavbar,
+                glassTint = if (preferenceUiBlur) GlassSurfaceNavbar else androidx.compose.ui.graphics.Color(0xEC101219),
                 outline = Outline,
                 isAmoled = false
             )
@@ -128,6 +136,7 @@ fun NetvioTheme(
     CompositionLocalProvider(
         LocalReduceMotion provides reduceMotion,
         LocalAmoledMode provides isAmoled,
+        LocalUiBlurEnabled provides preferenceUiBlur,
         LocalAppSurfaces provides surfaces
     ) {
         MaterialTheme(

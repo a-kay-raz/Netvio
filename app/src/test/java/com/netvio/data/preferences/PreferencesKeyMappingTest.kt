@@ -92,6 +92,18 @@ class PreferencesKeyMappingTest {
 
         val reduceMotion = repository.reduceMotion.first()
         assertFalse(reduceMotion)
+
+        val uiBlurEnabled = repository.uiBlurEnabled.first()
+        assertTrue(uiBlurEnabled)
+    }
+
+    @Test
+    fun testUiBlurEnabledDefaultsToTrueAndTogglesCleanly() = runBlocking {
+        assertTrue(repository.uiBlurEnabled.first())
+        repository.setUiBlurEnabled(false)
+        assertFalse(repository.uiBlurEnabled.first())
+        repository.setUiBlurEnabled(true)
+        assertTrue(repository.uiBlurEnabled.first())
     }
 
     @Test

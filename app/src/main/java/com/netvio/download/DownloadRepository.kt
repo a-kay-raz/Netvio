@@ -217,8 +217,29 @@ class DownloadRepository private constructor(private val context: Context) {
         }
     }
 
+    private fun sanitizeStaleCustomDownloadDir() {
+        try {
+            val customPath = kotlinx.coroutines.runBlocking {
+                preferencesRepository.customDownloadDir.first()
+            }
+            if (!customPath.isNullOrBlank()) {
+                val resolved = File(engine.resolveWritableCustomPath(customPath))
+                if (!engine.isDirectoryWritable(resolved) && !engine.isAppManagedDirectory(resolved)) {
+                    android.util.Log.w(
+                        "DownloadRepository",
+                        "Clearing unwritable Scoped Storage download path from v1.1.0: $customPath"
+                    )
+                    kotlinx.coroutines.runBlocking {
+                        preferencesRepository.setCustomDownloadDir(null)
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun loadPersistedMetadata() {
         scope.launch {
+            sanitizeStaleCustomDownloadDir()
             try {
                 val content = if (metadataFile.exists() || File(metadataFile.parentFile, "${metadataFile.name}.bak").exists()) {
                     try {
@@ -450,13 +471,21 @@ class DownloadRepository private constructor(private val context: Context) {
         NetvioDownloadService.start(context)
         NetvioDownloadJobService.scheduleUidtJob(context, id, estimatedTotal, wifiOnly)
 
+        dispatchDownloadWithEngine(id, item, estimatedTotal)
+    }
+
+    private fun dispatchDownloadWithEngine(
+        id: String,
+        item: DownloadItem,
+        fallbackTotalBytes: Long
+    ) {
         var lastNotifPercent = -1
         var lastNotifTimeMs = 0L
 
         engine.startOrResumeDownload(
             item = item,
             onProgress = { bytesDownloaded, totalBytes, percent, speed ->
-                val resolvedTotal = if (totalBytes > 0L) totalBytes else estimatedTotal
+                val resolvedTotal = if (totalBytes > 0L) totalBytes else fallbackTotalBytes
                 _downloads.update { list ->
                     list.map {
                         if (it.id == id) {
@@ -475,7 +504,8 @@ class DownloadRepository private constructor(private val context: Context) {
                 if (pctInt != lastNotifPercent && (now - lastNotifTimeMs >= 1000L || pctInt % 5 == 0)) {
                     lastNotifPercent = pctInt
                     lastNotifTimeMs = now
-                    val subText = "$pctInt% • ${formatBytes(bytesDownloaded)} / ${formatBytes(resolvedTotal)} • $speed"
+                    val totalText = if (resolvedTotal > 0L) " / ${formatBytes(resolvedTotal)}" else ""
+                    val subText = "$pctInt% • ${formatBytes(bytesDownloaded)}$totalText • $speed"
                     NetvioDownloadService.updateProgress(
                         context = context,
                         title = item.title,
@@ -486,59 +516,75 @@ class DownloadRepository private constructor(private val context: Context) {
                 }
             },
             onCompleted = { finalFilePath, totalBytes ->
-                _downloads.update { list ->
-                    list.map {
-                        if (it.id == id) {
-                            it.copy(
-                                state = DownloadState.COMPLETED,
-                                progressPercentage = 100f,
-                                bytesDownloaded = totalBytes,
-                                totalBytes = totalBytes,
-                                localFilePath = finalFilePath,
-                                speed = null
-                            )
-                        } else it
-                    }
-                }
-                persistMetadata()
-                NetvioDownloadJobService.cancelUidtJob(context, id)
-                NetvioDownloadService.notifyComplete(context, item.title)
-                checkStopService()
+                handleDownloadCompleted(id, item.title, finalFilePath, totalBytes)
             },
             onError = { errorMessage ->
-                val isNetworkWait = errorMessage.contains("Waiting for network", ignoreCase = true) ||
-                        errorMessage.contains("Waiting for Wi-Fi", ignoreCase = true)
-                val isRecoverable = isNetworkWait ||
-                        errorMessage.contains("connection lost", ignoreCase = true) ||
-                        errorMessage.contains("connection interrupted", ignoreCase = true) ||
-                        errorMessage.contains("timeout", ignoreCase = true)
-
-                _downloads.update { list ->
-                    list.map {
-                        if (it.id == id) {
-                            if (isRecoverable) {
-                                it.copy(
-                                    state = DownloadState.PAUSED,
-                                    failureReason = if (isNetworkWait) errorMessage else "Waiting for network",
-                                    speed = null
-                                )
-                            } else {
-                                it.copy(
-                                    state = DownloadState.FAILED,
-                                    failureReason = errorMessage,
-                                    speed = null
-                                )
-                            }
-                        } else it
-                    }
-                }
-                persistMetadata()
-                if (!isRecoverable) {
-                    NetvioDownloadJobService.cancelUidtJob(context, id)
-                }
-                checkStopService()
+                handleDownloadError(id, errorMessage)
             }
         )
+    }
+
+    private fun handleDownloadCompleted(
+        id: String,
+        title: String,
+        finalFilePath: String,
+        totalBytes: Long
+    ) {
+        _downloads.update { list ->
+            list.map {
+                if (it.id == id) {
+                    it.copy(
+                        state = DownloadState.COMPLETED,
+                        progressPercentage = 100f,
+                        bytesDownloaded = totalBytes,
+                        totalBytes = totalBytes,
+                        localFilePath = finalFilePath,
+                        failureReason = null,
+                        speed = null
+                    )
+                } else it
+            }
+        }
+        persistMetadata()
+        NetvioDownloadJobService.cancelUidtJob(context, id)
+        NetvioDownloadService.notifyComplete(context, title)
+        checkStopService()
+    }
+
+    private fun handleDownloadError(id: String, errorMessage: String) {
+        val isNetworkWait = errorMessage.contains("Waiting for network", ignoreCase = true) ||
+                errorMessage.contains("Waiting for Wi-Fi", ignoreCase = true)
+        val isRecoverable = isNetworkWait ||
+                errorMessage.contains("connection lost", ignoreCase = true) ||
+                errorMessage.contains("connection interrupted", ignoreCase = true) ||
+                errorMessage.contains("timeout", ignoreCase = true) ||
+                errorMessage.contains("end of stream", ignoreCase = true) ||
+                errorMessage.contains("abort", ignoreCase = true)
+
+        _downloads.update { list ->
+            list.map {
+                if (it.id == id) {
+                    if (isRecoverable) {
+                        it.copy(
+                            state = DownloadState.PAUSED,
+                            failureReason = if (isNetworkWait) errorMessage else "Waiting for network",
+                            speed = null
+                        )
+                    } else {
+                        it.copy(
+                            state = DownloadState.FAILED,
+                            failureReason = errorMessage,
+                            speed = null
+                        )
+                    }
+                } else it
+            }
+        }
+        persistMetadata()
+        if (!isRecoverable) {
+            NetvioDownloadJobService.cancelUidtJob(context, id)
+        }
+        checkStopService()
     }
 
     fun startDownload(
@@ -664,89 +710,20 @@ class DownloadRepository private constructor(private val context: Context) {
                 } catch (_: Exception) {}
             }
 
-            var lastNotifPercent = -1
-            var lastNotifTimeMs = 0L
-
-            engine.startOrResumeDownload(
-                item = effectiveItem,
-                onProgress = { bytesDownloaded, totalBytes, percent, speed ->
-                    _downloads.update { list ->
-                        list.map {
-                            if (it.id == id) {
-                                it.copy(
-                                    state = DownloadState.DOWNLOADING,
-                                    bytesDownloaded = bytesDownloaded,
-                                    totalBytes = totalBytes,
-                                    progressPercentage = percent,
-                                    speed = speed
-                                )
-                            } else it
-                        }
-                    }
-                    val now = System.currentTimeMillis()
-                    val pctInt = percent.toInt()
-                    if (pctInt != lastNotifPercent && (now - lastNotifTimeMs >= 1000L || pctInt % 5 == 0)) {
-                        lastNotifPercent = pctInt
-                        lastNotifTimeMs = now
-                        val subText = "$pctInt% • ${formatBytes(bytesDownloaded)} / ${formatBytes(totalBytes)} • $speed"
-                        NetvioDownloadService.updateProgress(
-                            context = context,
-                            title = effectiveItem.title,
-                            subtitle = subText,
-                            progress = pctInt,
-                            downloadId = id
-                        )
-                    }
-                },
-                onCompleted = { finalFilePath, totalBytes ->
-                    _downloads.update { list ->
-                        list.map {
-                            if (it.id == id) {
-                                it.copy(
-                                    state = DownloadState.COMPLETED,
-                                    progressPercentage = 100f,
-                                    bytesDownloaded = totalBytes,
-                                    totalBytes = totalBytes,
-                                    localFilePath = finalFilePath,
-                                    speed = null
-                                )
-                            } else it
-                        }
-                    }
-                    persistMetadata()
-                    NetvioDownloadJobService.cancelUidtJob(context, id)
-                    NetvioDownloadService.notifyComplete(context, effectiveItem.title)
-                    checkStopService()
-                },
-                onError = { errorMessage ->
-                    _downloads.update { list ->
-                        list.map {
-                            if (it.id == id) {
-                                it.copy(
-                                    state = DownloadState.FAILED,
-                                    failureReason = errorMessage,
-                                    speed = null
-                                )
-                            } else it
-                        }
-                    }
-                    persistMetadata()
-                    NetvioDownloadJobService.cancelUidtJob(context, id)
-                    checkStopService()
-                }
-            )
+            dispatchDownloadWithEngine(id, effectiveItem, effectiveItem.totalBytes)
         }
     }
 
     fun removeDownload(id: String) {
         val target = _downloads.value.firstOrNull { it.id == id }
+        val safeId = DownloadEngine.sanitizeFileId(id)
         target?.localFilePath?.let { path ->
             try {
                 val f = File(path)
                 if (f.exists()) {
                     if (f.isDirectory) {
                         f.deleteRecursively()
-                    } else if (f.name == "index.m3u8" || f.parentFile?.name == id) {
+                    } else if (f.name == "index.m3u8" || f.parentFile?.name == id || f.parentFile?.name == safeId) {
                         f.parentFile?.deleteRecursively()
                     } else {
                         f.delete()

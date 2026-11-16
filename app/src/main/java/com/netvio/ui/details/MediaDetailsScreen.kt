@@ -55,6 +55,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -68,6 +69,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -115,6 +117,8 @@ import androidx.compose.material.icons.outlined.MoreVert
 import com.netvio.download.DownloadItem
 import com.netvio.download.DownloadRepository
 import com.netvio.download.DownloadState
+import com.netvio.ui.details.downloads.BatchDownloadState
+import com.netvio.ui.details.downloads.MultiEpisodeDownloadSheet
 import com.netvio.ui.theme.LocalReduceMotion
 import com.netvio.ui.details.sheets.MediaDetailsActionSheet
 import com.netvio.ui.details.sheets.SheetScreen
@@ -219,6 +223,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.core.FastOutSlowInEasing
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.TextTertiary
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
 import com.netvio.ui.theme.pressable
 import com.netvio.ui.theme.rememberWindowDimensions
 import com.netvio.ui.util.TrimTransparentTransformation
@@ -320,9 +325,15 @@ fun MediaDetailsScreen(
     val latestPlayback by viewModel.latestPlayback.collectAsState()
     val episodePlaybackMap by viewModel.episodePlaybackMap.collectAsState()
     val castMembers by viewModel.cast.collectAsState()
+    val batchDownloadState by viewModel.batchDownloadState.collectAsState()
     val selectedAudioType by viewModel.selectedAudioType.collectAsState()
     val isInPlaylist by viewModel.isInPlaylist.collectAsState()
     val snackbarController = LocalSnackbarController.current
+    LaunchedEffect(viewModel, snackbarController) {
+        viewModel.batchNotices.collect { msg ->
+            snackbarController.show(msg)
+        }
+    }
     val downloadRepository = remember { DownloadRepository.getInstance(context) }
     val downloads by downloadRepository.downloads.collectAsState()
 
@@ -331,6 +342,7 @@ fun MediaDetailsScreen(
 
     var showSeasonSheet by remember { mutableStateOf(false) }
     var showDownloadSheet by remember { mutableStateOf(false) }
+    var showBatchDownloadSheet by remember { mutableStateOf(false) }
     var showWatchlistSheet by remember { mutableStateOf(false) }
     var showAddToPlaylistSheet by remember { mutableStateOf(false) }
     var selectedEpisodeForPlaylist by remember { mutableStateOf<EpisodeItem?>(null) }
@@ -486,8 +498,8 @@ fun MediaDetailsScreen(
                         byId to bySeasonEp
                     }
 
-                    if (windowDims.isTablet) {
-                        // Tablet / TV: Adaptive Two-Column Layout
+                    if (windowDims.isWideViewport) {
+                        // Wide Horizontal Viewport (Tablet / Foldable / Landscape Phone): Two-Column Split Layout
                         val canPlayAmbientTrailer = !hasTrailerFailed &&
                             isBackdropTrailerEnabled &&
                             !detail.trailerUrl.isNullOrBlank() &&
@@ -496,9 +508,18 @@ fun MediaDetailsScreen(
                             !showTrailerDialog &&
                             !isNavigatingAway
 
-                        Box(modifier = Modifier.fillMaxSize()) {
+                        val splitPadding = if (windowDims.isCompactHeight) Dimens.spacing16 else Dimens.spacing24
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .adaptiveHorizontalSafePadding(includeRailClearance = false),
+                            contentAlignment = Alignment.TopCenter
+                        ) {
+                            val isCompactSplit = windowDims.widthDp < 840.dp
                             Row(
                                 modifier = Modifier
+                                    .widthIn(max = Dimens.maxSplitLayoutWidth)
                                     .fillMaxSize()
                                     .hazeSource(state = detailsHazeState)
                             ) {
@@ -506,10 +527,12 @@ fun MediaDetailsScreen(
                                 val leftScrollState = rememberScrollState()
                                 Column(
                                     modifier = Modifier
-                                        .weight(0.45f)
+                                        .weight(if (isCompactSplit) 0.42f else 0.44f)
                                         .fillMaxHeight()
                                         .verticalScroll(leftScrollState)
-                                        .padding(Dimens.spacing24)
+                                        .statusBarsPadding()
+                                        .navigationBarsPadding()
+                                        .padding(splitPadding)
                                 ) {
                                     DetailsBackdropHero(
                                         backdropUrl = detail.backdropUrl ?: detail.posterUrl,
@@ -594,10 +617,16 @@ fun MediaDetailsScreen(
                                 val rightScrollState = rememberScrollState()
                                 Column(
                                     modifier = Modifier
-                                        .weight(0.55f)
+                                        .weight(if (isCompactSplit) 0.58f else 0.56f)
                                         .fillMaxHeight()
                                         .verticalScroll(rightScrollState)
-                                        .padding(top = Dimens.spacing24, end = Dimens.spacing24, bottom = Dimens.spacing24)
+                                        .statusBarsPadding()
+                                        .navigationBarsPadding()
+                                        .padding(
+                                            top = splitPadding,
+                                            end = (splitPadding - 16.dp).coerceAtLeast(0.dp),
+                                            bottom = splitPadding
+                                        )
                                 ) {
                                     DetailsTabsContent(
                                         detail = detail,
@@ -631,7 +660,11 @@ fun MediaDetailsScreen(
                                                 rightScrollState.animateScrollTo(0)
                                             }
                                         },
-                                        renderEpisodes = true
+                                        renderEpisodes = true,
+                                        batchDownloadState = batchDownloadState,
+                                        onOpenBatchDownload = if (totalEpisodes > 0) {
+                                            { showBatchDownloadSheet = true }
+                                        } else null
                                     )
                                 }
                             }
@@ -641,7 +674,7 @@ fun MediaDetailsScreen(
                                 modifier = Modifier
                                     .align(Alignment.TopStart)
                                     .statusBarsPadding()
-                                    .padding(start = Dimens.spacing24, top = Dimens.spacing8)
+                                    .padding(start = splitPadding, top = Dimens.spacing8)
                                     .zIndex(10f)
                             ) {
                                 Row(
@@ -972,7 +1005,11 @@ fun MediaDetailsScreen(
                                                 chunkSize = chunkSize,
                                                 onSelectChunk = { idx ->
                                                     selectedChunkIndex = idx
-                                                }
+                                                },
+                                                batchDownloadState = batchDownloadState,
+                                                onOpenBatchDownload = if (totalEpisodes > 0) {
+                                                    { showBatchDownloadSheet = true }
+                                                } else null
                                             )
                                         }
                                     }
@@ -1163,7 +1200,7 @@ fun MediaDetailsScreen(
                                             .align(Alignment.BottomStart)
                                             .fillMaxWidth()
                                             .height(68.dp)
-                                            .padding(horizontal = 16.dp),
+                                            .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         // Reserved space for the single persistent back button (48dp touch target)
@@ -1222,7 +1259,7 @@ fun MediaDetailsScreen(
                                     .align(Alignment.TopStart)
                                     .statusBarsPadding()
                                     .offset(y = backButtonOffsetY)
-                                    .padding(start = 16.dp)
+                                    .adaptiveHorizontalSafePadding(baseStart = 16.dp, includeRailClearance = false)
                                     .zIndex(25f)
                             ) {
                                 MediaDetailsGlassIconButton(
@@ -1244,7 +1281,7 @@ fun MediaDetailsScreen(
                                         .align(Alignment.TopEnd)
                                         .statusBarsPadding()
                                         .offset(y = backButtonOffsetY)
-                                        .padding(end = 16.dp)
+                                        .adaptiveHorizontalSafePadding(baseEnd = 16.dp, includeRailClearance = false)
                                         .zIndex(25f)
                                 ) {
                                     MediaDetailsGlassIconButton(
@@ -1327,6 +1364,29 @@ fun MediaDetailsScreen(
                 onStreamSelected = { stream ->
                     handlePlayWithStream(detail, linkSheetEpisode, stream)
                 }
+            )
+        }
+
+        // Series Multi-Episode Batch Download Sheet
+        if (showBatchDownloadSheet && successDetail != null) {
+            val detail = successDetail
+            MultiEpisodeDownloadSheet(
+                detail = detail,
+                initialSeason = selectedSeason ?: 1,
+                episodePlaybackMap = episodePlaybackMap,
+                downloads = downloads,
+                batchState = batchDownloadState,
+                onStartBatchDownload = { selectedEpisodes, preferredQuality, preferSameProvider ->
+                    viewModel.startBatchEpisodeDownload(
+                        detail = detail,
+                        episodes = selectedEpisodes,
+                        preferredQuality = preferredQuality,
+                        preferSameProvider = preferSameProvider
+                    )
+                },
+                onCancelBatchDownload = { viewModel.cancelBatchEpisodeDownload() },
+                onDismiss = { showBatchDownloadSheet = false },
+                hazeState = detailsHazeState
             )
         }
 
@@ -1606,7 +1666,8 @@ fun MediaDetailsScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .statusBarsPadding()
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                                .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false)
+                                .padding(vertical = 12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -1889,7 +1950,12 @@ private fun DetailsBackdropHero(
     modifier: Modifier = Modifier
 ) {
     val configuration = LocalConfiguration.current
-    val heroHeight = (configuration.screenHeightDp * 0.38f).coerceIn(240f, 340f).dp
+    val windowDimensions = LocalWindowDimensions.current
+    val heroHeight = if (windowDimensions.isCompactHeight) {
+        (configuration.screenHeightDp * 0.45f).coerceIn(150f, 200f).dp
+    } else {
+        (configuration.screenHeightDp * 0.38f).coerceIn(240f, 340f).dp
+    }
 
     Box(
         modifier = modifier
@@ -1950,7 +2016,8 @@ private fun DetailsBackdropHero(
             exit = fadeOut(tween(300)),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = Dimens.spacing16, bottom = Dimens.spacing16)
+                .adaptiveHorizontalSafePadding(baseEnd = Dimens.spacing16, includeRailClearance = false)
+                .padding(bottom = Dimens.spacing16)
         ) {
             FrostedMuteButton(
                 isMuted = isMuted,
@@ -2501,10 +2568,11 @@ private fun DetailsActionBlock(
         }
         val watchlistIcon = if (isInWatchlist) Icons.Outlined.Check else LucideIcons.Bookmark
 
-        // Action Buttons Row: 5 equal columns, glass rounded squares (46x46dp, 15dp radius)
+        // Action Buttons Row: 5 equal columns, glass rounded squares (up to 46x46dp, 15dp radius)
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Top
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             // Watchlist Action
             ActionButtonItem(
@@ -2620,14 +2688,16 @@ private fun ActionButtonItem(
                 scaleY = scaleAnim
             }
     ) {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
-                .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp),
+                .fillMaxWidth()
+                .heightIn(min = 48.dp),
             contentAlignment = Alignment.Center
         ) {
+            val tileSize = minOf(46.dp, maxWidth)
             Box(
                 modifier = Modifier
-                    .size(46.dp)
+                    .size(tileSize)
                     .mediaDetailsGlassSurface(
                         shape = tileShape,
                         hazeState = hazeState,
@@ -2647,14 +2717,24 @@ private fun ActionButtonItem(
 
             if (isDownloading) {
                 Box(contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(
-                        progress = { animatedProgress.coerceAtLeast(0.04f) },
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp,
-                        color = Color.White,
-                        trackColor = Color.White.copy(alpha = 0.2f),
-                        strokeCap = StrokeCap.Round
-                    )
+                    if (downloadProgress <= 0.001f) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                            color = Color.White,
+                            trackColor = Color.White.copy(alpha = 0.2f),
+                            strokeCap = StrokeCap.Round
+                        )
+                    } else {
+                        CircularProgressIndicator(
+                            progress = { animatedProgress.coerceAtLeast(0.04f) },
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                            color = Color.White,
+                            trackColor = Color.White.copy(alpha = 0.2f),
+                            strokeCap = StrokeCap.Round
+                        )
+                    }
                     Icon(
                         imageVector = LucideIcons.Pause,
                         contentDescription = "Pause",
@@ -2798,7 +2878,9 @@ private fun DetailsTabsContent(
     chunkSize: Int = 20,
     onSelectChunk: (Int) -> Unit = {},
     onScrollToEpisodesHeader: (() -> Unit)? = null,
-    renderEpisodes: Boolean = false
+    renderEpisodes: Boolean = false,
+    batchDownloadState: BatchDownloadState = BatchDownloadState(),
+    onOpenBatchDownload: (() -> Unit)? = null
 ) {
     val tabTitles = remember(isTv) {
         if (isTv) listOf("Episodes", "Details & Cast", "More like this")
@@ -2857,89 +2939,93 @@ private fun DetailsTabsContent(
                 "Episodes" -> {
                     // Rendered here for tablet two-column layout. On phone, LazyColumn virtualizes below tabs_content.
                     if (renderEpisodes || displayedEpisodes.isNotEmpty() || totalEpisodesCount > 0) {
-                        var expandedEpId by remember(selectedSeason, selectedChunkIndex) { mutableStateOf<String?>(null) }
-                        EpisodesTabContent(
-                            selectedSeason = selectedSeason,
-                            episodeCount = totalEpisodesCount,
-                            onSelectSeason = onSelectSeason,
-                            hazeState = hazeState,
-                            chunkCount = chunkCount,
-                            selectedChunkIndex = selectedChunkIndex,
-                            chunkSize = chunkSize,
-                            onSelectChunk = onSelectChunk
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        if (displayedEpisodes.isEmpty()) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 32.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "No episodes available for this season",
-                                    style = TextStyle(
-                                        fontFamily = AppFontFamily,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Normal,
-                                        color = Color.White.copy(alpha = 0.50f)
-                                    )
-                                )
-                            }
-                        } else {
-                            displayedEpisodes.forEachIndexed { index, episode ->
-                                val playback = episodePlaybackMap[episode.seasonNumber to episode.episodeNumber]
-                                val progress = if (playback != null && playback.durationMs > 0) {
-                                    (playback.currentPositionMs.toFloat() / playback.durationMs.toFloat()).coerceIn(0f, 1f)
-                                } else 0f
-                                val isWatched = playback?.isCompleted == true || (playback != null && playback.durationMs > 0 && playback.currentPositionMs >= (playback.durationMs * 0.9f).toLong())
-                                val isExpanded = expandedEpId == episode.id
-                                val epDownload = episodeDownloadMap.first[episode.id] ?: episodeDownloadMap.second[episode.seasonNumber to episode.episodeNumber]
-                                Column(
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            var expandedEpId by remember(selectedSeason, selectedChunkIndex) { mutableStateOf<String?>(null) }
+                            EpisodesTabContent(
+                                selectedSeason = selectedSeason,
+                                episodeCount = totalEpisodesCount,
+                                onSelectSeason = onSelectSeason,
+                                hazeState = hazeState,
+                                chunkCount = chunkCount,
+                                selectedChunkIndex = selectedChunkIndex,
+                                chunkSize = chunkSize,
+                                onSelectChunk = onSelectChunk,
+                                batchDownloadState = batchDownloadState,
+                                onOpenBatchDownload = onOpenBatchDownload
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            if (displayedEpisodes.isEmpty()) {
+                                Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 16.dp)
+                                        .padding(vertical = 32.dp),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    EpisodeRowItem(
-                                        episode = episode,
-                                        detail = detail,
-                                        progress = progress,
-                                        isWatched = isWatched,
-                                        isExpanded = isExpanded,
-                                        downloadItem = epDownload,
-                                        staggerIndex = index,
-                                        hazeState = hazeState,
-                                        onRowClick = {
-                                            expandedEpId = if (isExpanded) null else episode.id
-                                        },
-                                        onPlayClick = { onPlayEpisode(episode) },
-                                        onDownloadClick = { onDownloadEpisode(episode) },
-                                        onToggleWatched = { onToggleWatched(episode) },
-                                        onAddToPlaylist = { onAddToPlaylistEpisode(episode) },
-                                        onShowMessage = { tabSnackbarController.show(it) }
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(0.5.dp)
-                                            .background(Color.White.copy(alpha = 0.14f))
+                                    Text(
+                                        text = "No episodes available for this season",
+                                        style = TextStyle(
+                                            fontFamily = AppFontFamily,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Normal,
+                                            color = Color.White.copy(alpha = 0.50f)
+                                        )
                                     )
                                 }
-                            }
+                            } else {
+                                displayedEpisodes.forEachIndexed { index, episode ->
+                                    val playback = episodePlaybackMap[episode.seasonNumber to episode.episodeNumber]
+                                    val progress = if (playback != null && playback.durationMs > 0) {
+                                        (playback.currentPositionMs.toFloat() / playback.durationMs.toFloat()).coerceIn(0f, 1f)
+                                    } else 0f
+                                    val isWatched = playback?.isCompleted == true || (playback != null && playback.durationMs > 0 && playback.currentPositionMs >= (playback.durationMs * 0.9f).toLong())
+                                    val isExpanded = expandedEpId == episode.id
+                                    val epDownload = episodeDownloadMap.first[episode.id] ?: episodeDownloadMap.second[episode.seasonNumber to episode.episodeNumber]
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 16.dp)
+                                    ) {
+                                        EpisodeRowItem(
+                                            episode = episode,
+                                            detail = detail,
+                                            progress = progress,
+                                            isWatched = isWatched,
+                                            isExpanded = isExpanded,
+                                            downloadItem = epDownload,
+                                            staggerIndex = index,
+                                            hazeState = hazeState,
+                                            onRowClick = {
+                                                expandedEpId = if (isExpanded) null else episode.id
+                                            },
+                                            onPlayClick = { onPlayEpisode(episode) },
+                                            onDownloadClick = { onDownloadEpisode(episode) },
+                                            onToggleWatched = { onToggleWatched(episode) },
+                                            onAddToPlaylist = { onAddToPlaylistEpisode(episode) },
+                                            onShowMessage = { tabSnackbarController.show(it) }
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(0.5.dp)
+                                                .background(Color.White.copy(alpha = 0.14f))
+                                        )
+                                    }
+                                }
 
-                            if (chunkCount > 1) {
-                                Box(modifier = Modifier.padding(horizontal = 16.dp)) {
-                                    EpisodesPaginationButtons(
-                                        safeChunkIndex = selectedChunkIndex,
-                                        chunkCount = chunkCount,
-                                        chunkSize = chunkSize,
-                                        totalEpisodes = totalEpisodesCount,
-                                        hazeState = hazeState,
-                                        onSelectChunk = onSelectChunk,
-                                        onScrolled = {
-                                            onScrollToEpisodesHeader?.invoke()
-                                        }
-                                    )
+                                if (chunkCount > 1) {
+                                    Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                                        EpisodesPaginationButtons(
+                                            safeChunkIndex = selectedChunkIndex,
+                                            chunkCount = chunkCount,
+                                            chunkSize = chunkSize,
+                                            totalEpisodes = totalEpisodesCount,
+                                            hazeState = hazeState,
+                                            onSelectChunk = onSelectChunk,
+                                            onScrolled = {
+                                                onScrollToEpisodesHeader?.invoke()
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -2983,113 +3069,216 @@ private fun EpisodesTabContent(
     chunkCount: Int = 1,
     selectedChunkIndex: Int = 0,
     chunkSize: Int = 20,
-    onSelectChunk: (Int) -> Unit = {}
+    onSelectChunk: (Int) -> Unit = {},
+    batchDownloadState: BatchDownloadState = BatchDownloadState(),
+    onOpenBatchDownload: (() -> Unit)? = null
 ) {
     val reduceMotion = LocalReduceMotion.current
 
-    Column(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
     ) {
-        // Season control row
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            // Glass dropdown
-            val dropdownInteractionSource = remember { MutableInteractionSource() }
-            val isDropdownPressed by dropdownInteractionSource.collectIsPressedAsState()
-            val dropdownHaptic = LocalHapticFeedback.current
-            val dropdownScale by animateFloatAsState(
-                targetValue = if (isDropdownPressed && !reduceMotion) 0.96f else 1f,
-                animationSpec = if (reduceMotion) snap() else spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMedium
-                ),
-                label = "dropdownScale"
-            )
-
-            Box(
+        val isCompactHeader = maxWidth < 340.dp
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Season control row — FlowRow cleanly prevents collision on narrow horizontal split panes
+            FlowRow(
                 modifier = Modifier
-                    .height(48.dp)
-                    .graphicsLayer {
-                        scaleX = dropdownScale
-                        scaleY = dropdownScale
-                    }
-                    .clickable(
-                        interactionSource = dropdownInteractionSource,
-                        indication = null,
-                        role = Role.Button,
-                        onClickLabel = "Select season, currently Season $selectedSeason",
-                        onClick = {
-                            try {
-                                dropdownHaptic.performHapticFeedback(HapticFeedbackType.Confirm)
-                            } catch (_: Throwable) {}
-                            onSelectSeason()
-                        }
-                    ),
-                contentAlignment = Alignment.CenterStart
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+                itemVerticalAlignment = Alignment.CenterVertically
             ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                // Glass dropdown
+                val dropdownInteractionSource = remember { MutableInteractionSource() }
+                val isDropdownPressed by dropdownInteractionSource.collectIsPressedAsState()
+                val dropdownHaptic = LocalHapticFeedback.current
+                val dropdownScale by animateFloatAsState(
+                    targetValue = if (isDropdownPressed && !reduceMotion) 0.96f else 1f,
+                    animationSpec = if (reduceMotion) snap() else spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMedium
+                    ),
+                    label = "dropdownScale"
+                )
+
                 Box(
                     modifier = Modifier
-                        .height(34.dp)
-                        .mediaDetailsGlassSurface(
-                            shape = RoundedCornerShape(12.dp),
-                            hazeState = hazeState,
-                            alphaFill = 0.08f
-                        )
-                        .padding(horizontal = 12.dp),
-                    contentAlignment = Alignment.Center
+                        .height(48.dp)
+                        .graphicsLayer {
+                            scaleX = dropdownScale
+                            scaleY = dropdownScale
+                        }
+                        .clickable(
+                            interactionSource = dropdownInteractionSource,
+                            indication = null,
+                            role = Role.Button,
+                            onClickLabel = "Select season, currently Season $selectedSeason",
+                            onClick = {
+                                try {
+                                    dropdownHaptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                                } catch (_: Throwable) {}
+                                onSelectSeason()
+                            }
+                        ),
+                    contentAlignment = Alignment.CenterStart
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    Box(
+                        modifier = Modifier
+                            .height(34.dp)
+                            .mediaDetailsGlassSurface(
+                                shape = RoundedCornerShape(12.dp),
+                                hazeState = hazeState,
+                                alphaFill = 0.08f
+                            )
+                            .padding(horizontal = 12.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        AnimatedContent(
-                            targetState = selectedSeason,
-                            transitionSpec = { fadeIn(tween(120)) togetherWith fadeOut(tween(120)) },
-                            label = "seasonLabelCrossfade"
-                        ) { s ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            AnimatedContent(
+                                targetState = selectedSeason,
+                                transitionSpec = { fadeIn(tween(120)) togetherWith fadeOut(tween(120)) },
+                                label = "seasonLabelCrossfade"
+                            ) { s ->
+                                Text(
+                                    text = "Season $s",
+                                    style = TextStyle(
+                                        fontFamily = AppFontFamily,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color.White
+                                    )
+                                )
+                            }
+
+                            Icon(
+                                imageVector = Icons.Outlined.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = Color.White.copy(alpha = 0.85f),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+
+                AnimatedContent(
+                    targetState = episodeCount,
+                    transitionSpec = { fadeIn(tween(120)) togetherWith fadeOut(tween(120)) },
+                    label = "epCountCrossfade"
+                ) { count ->
+                    Text(
+                        text = if (onOpenBatchDownload != null) {
+                            if (count == 1) "1 ep" else "$count eps"
+                        } else {
+                            "$count ${if (count == 1) "episode" else "episodes"}"
+                        },
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Normal,
+                            fontFeatureSettings = "tnum",
+                            color = Color.White.copy(alpha = 0.60f)
+                        )
+                    )
+                }
+            }
+
+            if (onOpenBatchDownload != null) {
+                val batchInteractionSource = remember { MutableInteractionSource() }
+                val isBatchPressed by batchInteractionSource.collectIsPressedAsState()
+                val batchHaptic = LocalHapticFeedback.current
+                val batchScale by animateFloatAsState(
+                    targetValue = if (isBatchPressed && !reduceMotion) 0.96f else 1f,
+                    animationSpec = if (reduceMotion) snap() else spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMedium
+                    ),
+                    label = "batchDownloadScale"
+                )
+
+                Box(
+                    modifier = Modifier
+                        .height(48.dp)
+                        .graphicsLayer {
+                            scaleX = batchScale
+                            scaleY = batchScale
+                        }
+                        .clickable(
+                            interactionSource = batchInteractionSource,
+                            indication = null,
+                            role = Role.Button,
+                            onClickLabel = "Download multiple episodes",
+                            onClick = {
+                                try {
+                                    batchHaptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                                } catch (_: Throwable) {}
+                                onOpenBatchDownload()
+                            }
+                        ),
+                    contentAlignment = Alignment.CenterEnd
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .height(34.dp)
+                            .mediaDetailsGlassSurface(
+                                shape = RoundedCornerShape(12.dp),
+                                hazeState = hazeState,
+                                alphaFill = 0.08f
+                            )
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            if (batchDownloadState.isRunning) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(13.dp),
+                                    strokeWidth = 1.75.dp,
+                                    color = Color.White,
+                                    trackColor = Color.White.copy(alpha = 0.2f)
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Outlined.Download,
+                                    contentDescription = null,
+                                    tint = Color.White.copy(alpha = 0.90f),
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
                             Text(
-                                text = "Season $s",
+                                text = if (batchDownloadState.isRunning && batchDownloadState.totalCount > 0) {
+                                    "Resolving ${batchDownloadState.processedCount}/${batchDownloadState.totalCount}"
+                                } else if (batchDownloadState.isRunning) {
+                                    "Resolving…"
+                                } else if (isCompactHeader) {
+                                    "Download All"
+                                } else {
+                                    "Download Episodes"
+                                },
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
                                 style = TextStyle(
                                     fontFamily = AppFontFamily,
-                                    fontSize = 13.sp,
+                                    fontSize = 12.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = Color.White
                                 )
                             )
                         }
-
-                        Icon(
-                            imageVector = Icons.Outlined.KeyboardArrowDown,
-                            contentDescription = null,
-                            tint = Color.White.copy(alpha = 0.85f),
-                            modifier = Modifier.size(16.dp)
-                        )
                     }
                 }
-            }
-
-            // Right: episode count for selected season in 11sp muted
-            AnimatedContent(
-                targetState = episodeCount,
-                transitionSpec = { fadeIn(tween(120)) togetherWith fadeOut(tween(120)) },
-                label = "epCountCrossfade"
-            ) { count ->
-                Text(
-                    text = "$count ${if (count == 1) "episode" else "episodes"}",
-                    style = TextStyle(
-                        fontFamily = AppFontFamily,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Normal,
-                        color = Color.White.copy(alpha = 0.60f)
-                    )
-                )
             }
         }
 
@@ -3159,7 +3348,7 @@ private fun EpisodesTabContent(
         )
 
         Spacer(modifier = Modifier.height(4.dp))
-
+        }
     }
 }
 
@@ -3389,6 +3578,15 @@ private fun EpisodeRowItem(
             )
             .padding(vertical = 12.dp)
     ) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val isNarrowRow = maxWidth < 360.dp
+        val thumbWidth = if (isNarrowRow) 90.dp else 104.dp
+        val thumbHeight = if (isNarrowRow) 52.dp else 60.dp
+        val thumbGap = if (isNarrowRow) 10.dp else 12.dp
+        val actionsGap = if (isNarrowRow) 6.dp else 8.dp
+        val downloadTapWidth = if (isNarrowRow) 40.dp else 48.dp
+        val overflowTapWidth = if (isNarrowRow) 36.dp else 48.dp
+
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -3400,7 +3598,7 @@ private fun EpisodeRowItem(
                 // more-options button, not by a long-press gesture.
                 Box(
                     modifier = Modifier
-                        .size(width = 104.dp, height = 60.dp)
+                        .size(width = thumbWidth, height = thumbHeight)
                         .clip(RoundedCornerShape(10.dp))
                         .border(0.5.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(10.dp))
                         .background(Color(0xFF0F101A))
@@ -3454,7 +3652,7 @@ private fun EpisodeRowItem(
                     }
                 }
 
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(thumbGap))
 
                 // Title and Description
                 Column(
@@ -3464,7 +3662,7 @@ private fun EpisodeRowItem(
                         text = displayTitle,
                         style = TextStyle(
                             fontFamily = AppFontFamily,
-                            fontSize = 15.sp,
+                            fontSize = if (isNarrowRow) 14.sp else 15.sp,
                             fontWeight = FontWeight.Medium,
                             color = if (isWatched) Color.White.copy(alpha = 0.70f) else Color.White
                         ),
@@ -3507,7 +3705,7 @@ private fun EpisodeRowItem(
                     }
                 }
 
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(actionsGap))
 
                 // Right side: glass download tile (32 by 32 dp, 11 dp radius, outline icon at 16 dp)
                 val handleEpDownloadClick: () -> Unit = {
@@ -3525,7 +3723,7 @@ private fun EpisodeRowItem(
 
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(width = downloadTapWidth, height = 48.dp)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
@@ -3553,14 +3751,24 @@ private fun EpisodeRowItem(
                     ) {
                         if (isEpDownloading) {
                             Box(contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(
-                                    progress = { animatedEpProgress.coerceAtLeast(0.04f) },
-                                    modifier = Modifier.size(18.dp),
-                                    strokeWidth = 1.75.dp,
-                                    color = Color.White,
-                                    trackColor = Color.White.copy(alpha = 0.20f),
-                                    strokeCap = StrokeCap.Round
-                                )
+                                if (epDownloadProgress <= 0.001f) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 1.75.dp,
+                                        color = Color.White,
+                                        trackColor = Color.White.copy(alpha = 0.20f),
+                                        strokeCap = StrokeCap.Round
+                                    )
+                                } else {
+                                    CircularProgressIndicator(
+                                        progress = { animatedEpProgress.coerceAtLeast(0.04f) },
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 1.75.dp,
+                                        color = Color.White,
+                                        trackColor = Color.White.copy(alpha = 0.20f),
+                                        strokeCap = StrokeCap.Round
+                                    )
+                                }
                                 Icon(
                                     imageVector = LucideIcons.Pause,
                                     contentDescription = "Pause",
@@ -3609,10 +3817,10 @@ private fun EpisodeRowItem(
                     }
                 }
 
-                // Overflow menu icon as a small outline three-dot button with 48 dp accessible tap area
+                // Overflow menu icon as a small outline three-dot button with accessible tap area
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(width = overflowTapWidth, height = 48.dp)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
@@ -3686,7 +3894,7 @@ private fun EpisodeRowItem(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 116.dp),
+                        .padding(start = thumbWidth + thumbGap),
                     horizontalArrangement = Arrangement.Start
                 ) {
                     Box(
@@ -3724,6 +3932,7 @@ private fun EpisodeRowItem(
                     }
                 }
             }
+        }
         }
     }
 }

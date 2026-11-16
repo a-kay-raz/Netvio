@@ -1,5 +1,9 @@
 package com.netvio.data.sync
 
+import com.netvio.core.sync.supabase.CloudPlaylist
+import com.netvio.core.sync.supabase.CloudUserAddon
+import com.netvio.core.sync.supabase.CloudUserProfile
+import com.netvio.data.sync.supabase.SyncEfficiencyPolicy
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -84,5 +88,57 @@ class SupabaseSyncOptimizationTest {
 
         assertEquals(1, pendingDeletions.size)
         assertTrue(pendingDeletions.contains("https://cinemeta.strem.fun/manifest.json"))
+    }
+
+    @Test
+    fun testPullCooldownRespects5MinThresholdAndForceOverrides() {
+        val t0 = 1_700_000_000_000L
+
+        assertTrue(SyncEfficiencyPolicy.shouldRunDownstreamPull(false, false, 0L, t0))
+        assertFalse(SyncEfficiencyPolicy.shouldRunDownstreamPull(false, false, t0, t0 + 60_000L))
+        assertFalse(SyncEfficiencyPolicy.shouldRunDownstreamPull(false, false, t0, t0 + 299_999L))
+        assertTrue(SyncEfficiencyPolicy.shouldRunDownstreamPull(false, false, t0, t0 + 300_000L))
+        assertTrue(SyncEfficiencyPolicy.shouldRunDownstreamPull(true, false, t0, t0 + 1_000L))
+        assertTrue(SyncEfficiencyPolicy.shouldRunDownstreamPull(false, true, t0, t0 + 1_000L))
+    }
+
+    @Test
+    fun testDomainHashingIgnoresVolatileTimestampsAndDetectsMutations() {
+        val profA = listOf(
+            CloudUserProfile("default_user", "u1", "Primary", "ADMIN", clientUpdatedAtMs = 1000L),
+            CloudUserProfile("kids", "u1", "Kids", "KIDS", clientUpdatedAtMs = 1000L)
+        )
+        val profB = listOf(
+            CloudUserProfile("kids", "u1", "Kids", "KIDS", clientUpdatedAtMs = 9999L),
+            CloudUserProfile("default_user", "u1", "Primary", "ADMIN", clientUpdatedAtMs = 9999L)
+        )
+        val profModified = listOf(
+            CloudUserProfile("default_user", "u1", "Primary Renamed", "ADMIN", clientUpdatedAtMs = 9999L),
+            CloudUserProfile("kids", "u1", "Kids", "KIDS", clientUpdatedAtMs = 9999L)
+        )
+        assertEquals(SyncEfficiencyPolicy.hashProfiles(profA), SyncEfficiencyPolicy.hashProfiles(profB))
+        assertNotEquals(SyncEfficiencyPolicy.hashProfiles(profA), SyncEfficiencyPolicy.hashProfiles(profModified))
+
+        val addonsA = listOf(
+            CloudUserAddon("u1", "https://a.com/manifest.json", "stremio", "A", clientUpdatedAtMs = 100L)
+        )
+        val addonsB = listOf(
+            CloudUserAddon("u1", "https://a.com/manifest.json", "stremio", "A", clientUpdatedAtMs = 900L)
+        )
+        val addonsModified = addonsA + CloudUserAddon("u1", "https://b.com/manifest.json", "stremio", "B", clientUpdatedAtMs = 900L)
+        assertEquals(SyncEfficiencyPolicy.hashAddons(addonsA), SyncEfficiencyPolicy.hashAddons(addonsB))
+        assertNotEquals(SyncEfficiencyPolicy.hashAddons(addonsA), SyncEfficiencyPolicy.hashAddons(addonsModified))
+
+        val settings1 = mapOf("b" to "2", "a" to "1")
+        val settings2 = mapOf("a" to "1", "b" to "2")
+        val settingsModified = mapOf("a" to "1", "b" to "3")
+        assertEquals(SyncEfficiencyPolicy.hashSettings(settings1), SyncEfficiencyPolicy.hashSettings(settings2))
+        assertNotEquals(SyncEfficiencyPolicy.hashSettings(settings1), SyncEfficiencyPolicy.hashSettings(settingsModified))
+
+        val pl1 = listOf(CloudPlaylist("u1", "default_user", "p1", "Mix", false, "[1]", clientUpdatedAtMs = 100L))
+        val pl2 = listOf(CloudPlaylist("u1", "default_user", "p1", "Mix", false, "[1]", clientUpdatedAtMs = 999L))
+        val plModified = listOf(CloudPlaylist("u1", "default_user", "p1", "Mix", false, "[1,2]", clientUpdatedAtMs = 999L))
+        assertEquals(SyncEfficiencyPolicy.hashPlaylists(pl1), SyncEfficiencyPolicy.hashPlaylists(pl2))
+        assertNotEquals(SyncEfficiencyPolicy.hashPlaylists(pl1), SyncEfficiencyPolicy.hashPlaylists(plModified))
     }
 }

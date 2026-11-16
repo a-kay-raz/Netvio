@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -67,6 +68,140 @@ object StreamsRepository {
         activeRequestKey = requestToken
         activeJob?.cancel()
 
+        val prepared = prepareStreamQuery(
+            type = type,
+            videoId = videoId,
+            season = season,
+            episode = episode,
+            title = title,
+            year = year,
+            originalLanguage = originalLanguage,
+            imdbId = imdbId
+        )
+
+        if (prepared.scrapers.isEmpty() && prepared.addons.isEmpty()) {
+            _uiState.value = StreamsUiState(
+                requestToken = requestToken,
+                isAnyLoading = false,
+                emptyStateReason = StreamsEmptyStateReason.NoCompatibleAddons
+            )
+            return
+        }
+
+        val initialGroups = buildInitialGroups(prepared)
+
+        _uiState.value = StreamsUiState(
+            requestToken = requestToken,
+            groups = initialGroups,
+            isAnyLoading = true,
+            emptyStateReason = null
+        )
+
+        activeJob = scope.launch {
+            executeStreamTasks(prepared) { completion ->
+                _uiState.update { current ->
+                    val updatedGroups = current.groups.map { group ->
+                        if (group.addonId != completion.addonId) {
+                            group
+                        } else {
+                            val mergedStreams = if (prepared.isLiveTv || prepared.isCustomId) {
+                                (group.streams + completion.streams)
+                            } else {
+                                (group.streams + completion.streams).sortedForGroupedDisplay()
+                            }
+                            group.copy(
+                                streams = mergedStreams,
+                                isLoading = false,
+                                error = if (mergedStreams.isEmpty()) completion.error else null
+                            )
+                        }
+                    }
+
+                    val stillLoading = updatedGroups.any { it.isLoading }
+                    val allAvailable = updatedGroups.flatMap { it.streams }
+                    val bestAutoPlay = current.autoPlayStream ?: allAvailable.firstOrNull { it.playableDirectUrl != null }
+
+                    current.copy(
+                        groups = updatedGroups,
+                        isAnyLoading = stillLoading,
+                        autoPlayStream = bestAutoPlay,
+                        emptyStateReason = if (!stillLoading && allAvailable.isEmpty()) {
+                            StreamsEmptyStateReason.NoStreamsFound
+                        } else null
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Fetches streams in an isolated coroutine without mutating [uiState] or cancelling
+     * any foreground stream loading (used by background batch episode downloads).
+     */
+    suspend fun fetchStreamsSnapshot(
+        type: String,
+        videoId: String,
+        season: Int? = null,
+        episode: Int? = null,
+        title: String? = null,
+        year: Int? = null,
+        originalLanguage: String? = null,
+        imdbId: String? = null,
+        timeoutMs: Long = 35_000L
+    ): List<StreamItem> {
+        val prepared = prepareStreamQuery(
+            type = type,
+            videoId = videoId,
+            season = season,
+            episode = episode,
+            title = title,
+            year = year,
+            originalLanguage = originalLanguage,
+            imdbId = imdbId
+        )
+        if (prepared.scrapers.isEmpty() && prepared.addons.isEmpty()) return emptyList()
+
+        val collected = java.util.Collections.synchronizedList(mutableListOf<StreamItem>())
+        withTimeoutOrNull(timeoutMs) {
+            executeStreamTasks(prepared) { completion ->
+                if (completion.streams.isNotEmpty()) {
+                    collected.addAll(completion.streams)
+                }
+            }
+        }
+        val snapshot = synchronized(collected) { collected.toList() }
+        return if (prepared.isLiveTv || prepared.isCustomId) {
+            snapshot
+        } else {
+            snapshot.sortedForGroupedDisplay()
+        }
+    }
+
+    private data class PreparedStreamQuery(
+        val normType: String,
+        val isCustomId: Boolean,
+        val isLiveTv: Boolean,
+        val cleanTmdbId: String,
+        val effectiveOriginalLanguage: String?,
+        val season: Int?,
+        val episode: Int?,
+        val title: String?,
+        val year: Int?,
+        val imdbId: String?,
+        val scrapers: List<com.netvio.core.js.PluginScraper>,
+        val addons: List<com.netvio.core.addons.ManagedAddon>
+    )
+
+    private fun prepareStreamQuery(
+        type: String,
+        videoId: String,
+        season: Int?,
+        episode: Int?,
+        title: String?,
+        year: Int?,
+        originalLanguage: String?,
+        imdbId: String?
+    ): PreparedStreamQuery {
         val normType = normalizePluginType(type)
         val isCustomId = isCustomStremioAddonId(videoId)
         val isLiveTv = normType == "live" || normType == "channel" || normType == "live_tv" || (normType == "tv" && isCustomId)
@@ -79,17 +214,24 @@ object StreamsRepository {
         val targetAddonType = if (isLiveTv) "live" else normType
         val addons = addonRepo?.getEnabledAddonsForType(targetAddonType, cleanTmdbId) ?: emptyList()
 
-        if (scrapers.isEmpty() && addons.isEmpty()) {
-            _uiState.value = StreamsUiState(
-                requestToken = requestToken,
-                isAnyLoading = false,
-                emptyStateReason = StreamsEmptyStateReason.NoCompatibleAddons
-            )
-            return
-        }
+        return PreparedStreamQuery(
+            normType = normType,
+            isCustomId = isCustomId,
+            isLiveTv = isLiveTv,
+            cleanTmdbId = cleanTmdbId,
+            effectiveOriginalLanguage = effectiveOriginalLanguage,
+            season = season,
+            episode = episode,
+            title = title,
+            year = year,
+            imdbId = imdbId,
+            scrapers = scrapers,
+            addons = addons
+        )
+    }
 
-        // Initialize placeholder loading groups for scrapers and addons
-        val scraperGroups = scrapers.map { scraper ->
+    private fun buildInitialGroups(prepared: PreparedStreamQuery): List<AddonStreamGroup> {
+        val scraperGroups = prepared.scrapers.map { scraper ->
             AddonStreamGroup(
                 addonName = scraper.name,
                 addonId = "plugin:${scraper.id}",
@@ -97,7 +239,7 @@ object StreamsRepository {
                 isLoading = true
             )
         }
-        val addonGroups = addons.map { addon ->
+        val addonGroups = prepared.addons.map { addon ->
             AddonStreamGroup(
                 addonName = addon.displayTitle,
                 addonId = addon.streamAddonInstanceId(addon.manifest?.id ?: addon.displayTitle),
@@ -105,16 +247,27 @@ object StreamsRepository {
                 isLoading = true
             )
         }
-        val initialGroups = scraperGroups + addonGroups
+        return scraperGroups + addonGroups
+    }
 
-        _uiState.value = StreamsUiState(
-            requestToken = requestToken,
-            groups = initialGroups,
-            isAnyLoading = true,
-            emptyStateReason = null
-        )
+    private suspend fun executeStreamTasks(
+        prepared: PreparedStreamQuery,
+        onCompletion: (StreamLoadCompletion.PluginScraper) -> Unit
+    ) {
+        coroutineScope {
+            val normType = prepared.normType
+            val isCustomId = prepared.isCustomId
+            val isLiveTv = prepared.isLiveTv
+            val cleanTmdbId = prepared.cleanTmdbId
+            val effectiveOriginalLanguage = prepared.effectiveOriginalLanguage
+            val season = prepared.season
+            val episode = prepared.episode
+            val title = prepared.title
+            val year = prepared.year
+            val imdbId = prepared.imdbId
+            val scrapers = prepared.scrapers
+            val addons = prepared.addons
 
-        activeJob = scope.launch {
             val totalTasks = scrapers.size + addons.size
             val completions = Channel<StreamLoadCompletion>(capacity = Channel.BUFFERED)
 
@@ -348,13 +501,25 @@ object StreamsRepository {
                         "anime"
                     }
                     isSeries -> {
-                        if ("series" in declaredTypes) "series" else if ("tv" in declaredTypes) "tv" else "series"
+                        when {
+                            normType == "other" && "other" in declaredTypes && isCustomId -> "other"
+                            "series" in declaredTypes -> "series"
+                            "tv" in declaredTypes -> "tv"
+                            normType in declaredTypes -> normType
+                            "other" in declaredTypes -> "other"
+                            else -> "series"
+                        }
                     }
                     normType == "movie" -> {
-                        if ("movie" in declaredTypes) "movie" else if ("movies" in declaredTypes) "movies" else "movie"
+                        when {
+                            "movie" in declaredTypes -> "movie"
+                            "movies" in declaredTypes -> "movies"
+                            "other" in declaredTypes -> "other"
+                            else -> "movie"
+                        }
                     }
                     else -> {
-                        listOf(normType, "movie").firstOrNull { it in declaredTypes } ?: normType
+                        listOf(normType, "movie", "other").firstOrNull { it in declaredTypes } ?: normType
                     }
                 }
 
@@ -375,7 +540,9 @@ object StreamsRepository {
                                 addonId = addonId,
                                 addonLogo = addon.manifest?.logoUrl,
                                 originalLanguage = effectiveOriginalLanguage
-                            )
+                            ).filter { item ->
+                                !item.directPlaybackUrl.isNullOrBlank() || item.isTorrentStream
+                            }
                         } else emptyList()
 
                         val shouldBypassMatchScorer = isLiveTv ||
@@ -420,37 +587,7 @@ object StreamsRepository {
             repeat(totalTasks) {
                 val completion = completions.receive()
                 if (completion is StreamLoadCompletion.PluginScraper) {
-                    _uiState.update { current ->
-                        val updatedGroups = current.groups.map { group ->
-                            if (group.addonId != completion.addonId) {
-                                group
-                            } else {
-                                val mergedStreams = if (isLiveTv || isCustomId) {
-                                    (group.streams + completion.streams)
-                                } else {
-                                    (group.streams + completion.streams).sortedForGroupedDisplay()
-                                }
-                                group.copy(
-                                    streams = mergedStreams,
-                                    isLoading = false,
-                                    error = if (mergedStreams.isEmpty()) completion.error else null
-                                )
-                            }
-                        }
-
-                        val stillLoading = updatedGroups.any { it.isLoading }
-                        val allAvailable = updatedGroups.flatMap { it.streams }
-                        val bestAutoPlay = current.autoPlayStream ?: allAvailable.firstOrNull { it.playableDirectUrl != null }
-
-                        current.copy(
-                            groups = updatedGroups,
-                            isAnyLoading = stillLoading,
-                            autoPlayStream = bestAutoPlay,
-                            emptyStateReason = if (!stillLoading && allAvailable.isEmpty()) {
-                                StreamsEmptyStateReason.NoStreamsFound
-                            } else null
-                        )
-                    }
+                    onCompletion(completion)
                 }
             }
         }

@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.netvio.core.model.CatalogRow
 import com.netvio.core.model.MediaItem
+import com.netvio.ui.theme.rememberAdaptiveHorizontalPadding
 import com.netvio.ui.theme.rememberWindowDimensions
 
 /**
@@ -54,7 +55,10 @@ fun ContentRow(
 
         LazyRow(
             state = rowListState,
-            contentPadding = PaddingValues(horizontal = windowDimensions.horizontalMargin),
+            contentPadding = rememberAdaptiveHorizontalPadding(
+                baseStart = windowDimensions.horizontalMargin,
+                baseEnd = windowDimensions.horizontalMargin
+            ),
             horizontalArrangement = Arrangement.spacedBy(horizontalGap),
             modifier = Modifier.fillMaxWidth()
         ) {

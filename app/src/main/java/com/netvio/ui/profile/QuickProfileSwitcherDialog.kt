@@ -17,13 +17,17 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Lock
@@ -62,6 +66,9 @@ import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.NetvioGlassTokens
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.LocalReduceMotion
+import com.netvio.ui.theme.Dimens
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
+import com.netvio.ui.theme.rememberWindowDimensions
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -131,9 +138,13 @@ fun QuickProfileSwitcherDialog(
                 ),
             contentAlignment = Alignment.Center
         ) {
+            val windowDims = rememberWindowDimensions()
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.92f)
+                    .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false)
+                    .widthIn(max = if (windowDims.isWideViewport) 480.dp else Dimens.maxDialogWidth)
+                    .fillMaxWidth()
+                    .heightIn(max = windowDims.dialogMaxHeight())
                     .graphicsLayer {
                         alpha = animVal
                         scaleX = cardScale
@@ -164,7 +175,9 @@ fun QuickProfileSwitcherDialog(
                     )
             ) {
                 Column(
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
                 ) {
                     // Header Block matching the glass dialog style
                     Row(

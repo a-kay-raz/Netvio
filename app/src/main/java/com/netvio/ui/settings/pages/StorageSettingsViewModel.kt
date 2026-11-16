@@ -16,6 +16,7 @@ import com.netvio.data.preferences.PreferencesRepository
 import com.netvio.data.preferences.preferencesDataStore
 import com.netvio.download.DownloadEngine
 import com.netvio.ui.player.StreamingPlaybackCacheManager
+import com.netvio.download.DownloadStorageVolume
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -76,7 +77,23 @@ class StorageSettingsViewModel(application: Application) : AndroidViewModel(appl
 
     init {
         viewModelScope.launch { prefs.wifiOnlyDownloads.collect { _wifiOnlyDownloads.value = it } }
-        viewModelScope.launch { prefs.customDownloadDir.collect { _customDownloadDir.value = it } }
+        viewModelScope.launch {
+            prefs.customDownloadDir.collect { raw ->
+                if (!raw.isNullOrBlank()) {
+                    val isInvalidScopedPath = withContext(Dispatchers.IO) {
+                        val engine = DownloadEngine(getApplication())
+                        val resolved = File(engine.resolveWritableCustomPath(raw))
+                        !engine.isDirectoryWritable(resolved) && !engine.isAppManagedDirectory(resolved)
+                    }
+                    if (isInvalidScopedPath) {
+                        _customDownloadDir.value = null
+                        prefs.setCustomDownloadDir(null)
+                        return@collect
+                    }
+                }
+                _customDownloadDir.value = raw
+            }
+        }
         refreshAllStorageTelemetry()
     }
 
@@ -230,6 +247,16 @@ class StorageSettingsViewModel(application: Application) : AndroidViewModel(appl
             prefs.setCustomDownloadDir(path)
             refreshAllStorageTelemetry()
         }
+    }
+
+    suspend fun getAvailableDownloadVolumes(): List<DownloadStorageVolume> = withContext(Dispatchers.IO) {
+        DownloadEngine(getApplication()).getAvailableWritableVolumes()
+    }
+
+    suspend fun isDirectoryWritable(rawPath: String): Boolean = withContext(Dispatchers.IO) {
+        val engine = DownloadEngine(getApplication())
+        val resolved = File(engine.resolveWritableCustomPath(rawPath))
+        engine.isDirectoryWritable(resolved)
     }
 
     private val backupManager = ConfigurationBackupManager(application)

@@ -46,6 +46,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -115,6 +116,8 @@ import com.netvio.ui.components.tvFocusable
 import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.LocalReduceMotion
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
+import com.netvio.ui.theme.rememberWindowDimensions
 import kotlin.math.roundToInt
 
 /**
@@ -330,11 +333,14 @@ fun ProfileStudioSheet(
                     ),
                 contentAlignment = Alignment.BottomCenter
             ) {
-                // Sheet container (up to ~90% height, translated via GPU RenderNode matrix)
+                // Sheet container (up to ~90% height, centered & capped on tablets)
+                val windowDims = rememberWindowDimensions()
                 Box(
                     modifier = modifier
+                        .adaptiveHorizontalSafePadding(includeRailClearance = false)
+                        .widthIn(max = 600.dp)
                         .fillMaxWidth()
-                        .fillMaxHeight(0.90f)
+                        .fillMaxHeight(if (windowDims.isCompactHeight) 0.94f else 0.90f)
                         .graphicsLayer {
                             translationY = sheetAnimOffsetY.value
                         }

@@ -10,11 +10,22 @@ import com.netvio.core.model.MediaType
 import com.netvio.core.repository.ProviderRepository
 import com.netvio.data.local.PlaybackHistoryEntity
 import com.netvio.data.repository.LibraryRepository
+import com.netvio.ui.details.downloads.BatchDownloadCoordinator
+import com.netvio.ui.details.downloads.BatchDownloadState
+import com.netvio.ui.details.downloads.BatchPreferredQuality
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 import com.netvio.ui.util.UserError
@@ -80,6 +91,27 @@ class MediaDetailsViewModel(
     private val _cast = MutableStateFlow<List<CastMember>>(emptyList())
     val cast: StateFlow<List<CastMember>> = _cast.asStateFlow()
 
+    private val batchCoordinator = BatchDownloadCoordinator.getInstance(application)
+    private val observedMediaIds = MutableStateFlow<Pair<String?, String?>>(null to null)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val batchDownloadState: StateFlow<BatchDownloadState> = observedMediaIds
+        .flatMapLatest { (navId, detailId) ->
+            val primary = detailId ?: navId
+            if (primary.isNullOrBlank()) flowOf(BatchDownloadState())
+            else batchCoordinator.observeState(primary, navId)
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, BatchDownloadState())
+
+    val batchNotices: Flow<String> = batchCoordinator.notices
+        .filter { notice ->
+            val (navId, detailId) = observedMediaIds.value
+            notice.mediaId == detailId ||
+                notice.mediaId == navId ||
+                (notice.aliasId != null && (notice.aliasId == navId || notice.aliasId == detailId))
+        }
+        .map { it.message }
+
     private var currentMediaId: String? = null
     private var currentProvider: String? = null
     private var currentType: MediaType? = null
@@ -97,6 +129,11 @@ class MediaDetailsViewModel(
         fallbackLogoUrl: String? = initialLogoUrl
     ) {
         hasUserManuallySelectedSeason = false
+        val existingDetailId = (_uiState.value as? MediaDetailsUiState.Success)
+            ?.detail
+            ?.id
+            ?.takeIf { mediaId == currentMediaId }
+        observedMediaIds.value = mediaId to existingDetailId
         watchlistObserverJob?.cancel()
         watchlistObserverJob = viewModelScope.launch {
             libraryRepository.getWatchlistEntity(mediaId).collect { entity ->
@@ -209,6 +246,7 @@ class MediaDetailsViewModel(
 
                 // 1. Immediately reveal the screen with core details and existing cast
                 _cast.value = detail.cast
+                observedMediaIds.value = mediaId to detail.id
                 _uiState.value = MediaDetailsUiState.Success(detail)
 
                 // 2. Asynchronously enrich cast members in the background without gating the UI
@@ -317,6 +355,29 @@ class MediaDetailsViewModel(
                 )
             }
         }
+    }
+
+    fun startBatchEpisodeDownload(
+        detail: MediaDetail,
+        episodes: List<EpisodeItem>,
+        preferredQuality: BatchPreferredQuality,
+        preferSameProvider: Boolean
+    ) {
+        if (episodes.isEmpty()) return
+        observedMediaIds.value = currentMediaId to detail.id
+        batchCoordinator.startBatch(
+            detail = detail,
+            episodes = episodes,
+            preferredQuality = preferredQuality,
+            preferSameProvider = preferSameProvider,
+            navMediaId = currentMediaId
+        )
+    }
+
+    fun cancelBatchEpisodeDownload() {
+        val (navId, detailId) = observedMediaIds.value
+        val primary = detailId ?: navId ?: currentMediaId ?: return
+        batchCoordinator.cancelBatch(primaryId = primary, aliasId = navId ?: currentMediaId)
     }
 
     fun retry() {

@@ -65,6 +65,9 @@ import com.netvio.ui.library.components.PlaylistMosaic
 import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.LocalReduceMotion
 import com.netvio.ui.theme.pressable
+import com.netvio.ui.theme.LocalNavigationLayout
+import com.netvio.ui.theme.LocalWindowDimensions
+import com.netvio.ui.theme.rememberAdaptiveHorizontalPadding
 import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.delay
 
@@ -100,12 +103,27 @@ fun PlaylistsTab(
         )
     }
 
+    val windowDimensions = LocalWindowDimensions.current
+    val navLayout = LocalNavigationLayout.current
+    val gridColumns = windowDimensions.posterGridColumns(
+        minItemWidth = 165.dp,
+        gap = 14.dp,
+        minCols = 2,
+        maxCols = 5,
+        reservedStartDp = navLayout.sideRailStartClearance
+    )
+
     LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Fixed(gridColumns),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 110.dp),
+        contentPadding = rememberAdaptiveHorizontalPadding(
+            baseStart = windowDimensions.horizontalMargin,
+            baseEnd = windowDimensions.horizontalMargin,
+            top = 12.dp,
+            bottom = navLayout.recommendedBottomContentPadding
+        ),
         modifier = modifier.fillMaxSize()
     ) {
         // Dedicated first-time onboarding empty state when no playlists exist

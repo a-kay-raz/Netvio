@@ -20,6 +20,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -154,6 +155,9 @@ internal class ScrollDirectionAccumulator(val thresholdPx: Float) {
 
 @Composable
 fun ObserveScrollForNavbar(lazyListState: androidx.compose.foundation.lazy.LazyListState) {
+    // Side navigation rail occupies a dedicated edge gutter and must remain accessible during scroll.
+    if (com.netvio.ui.theme.LocalNavigationLayout.current.hasSideRail) return
+
     val navbarVisible = LocalNavbarVisible.current
     val thresholdPx = with(LocalDensity.current) { 28.dp.toPx() }
 
@@ -199,6 +203,9 @@ fun ObserveScrollForNavbar(lazyListState: androidx.compose.foundation.lazy.LazyL
 
 @Composable
 fun ObserveScrollForNavbar(gridState: androidx.compose.foundation.lazy.grid.LazyGridState) {
+    // Side navigation rail occupies a dedicated edge gutter and must remain accessible during scroll.
+    if (com.netvio.ui.theme.LocalNavigationLayout.current.hasSideRail) return
+
     val navbarVisible = LocalNavbarVisible.current
     val thresholdPx = with(LocalDensity.current) { 28.dp.toPx() }
 
@@ -259,6 +266,7 @@ fun AppNavHost(
     val cardScaleMode by preferencesRepository.cardScaleMode.collectAsState(initial = com.netvio.data.preferences.CardScaleMode.FLAGSHIP)
     val navbarStyle by preferencesRepository.navbarStyle.collectAsState(initial = com.netvio.data.preferences.NavbarStyle.FLOATING)
     val isAmoledMode by preferencesRepository.amoledMode.collectAsState(initial = true)
+    val isUiBlurEnabled by preferencesRepository.uiBlurEnabled.collectAsState(initial = true)
 
     val windowDimensions = com.netvio.ui.theme.rememberWindowDimensions()
 
@@ -277,7 +285,8 @@ fun AppNavHost(
         com.netvio.ui.components.LocalCardScaleMode provides cardScaleMode,
         LocalSnackbarController provides snackbarController,
         LocalTabReselection provides tabReselectionEvents,
-        com.netvio.ui.theme.LocalAmoledMode provides isAmoledMode
+        com.netvio.ui.theme.LocalAmoledMode provides isAmoledMode,
+        com.netvio.ui.theme.LocalUiBlurEnabled provides isUiBlurEnabled
     ) {
         val profileManager = remember { com.netvio.data.profile.ProfileManager.getInstance(context) }
         val activeProfile by profileManager.activeProfile.collectAsState()
@@ -330,54 +339,87 @@ fun AppNavHost(
             return@CompositionLocalProvider
         }
 
-        val showBottomNav = windowDimensions.isPhone && !isFullscreen
-        val showNavRail = !windowDimensions.isPhone && !isFullscreen
+        val showNavRail = windowDimensions.useSideNavigationRail && !isFullscreen
+        val showBottomNav = !windowDimensions.useSideNavigationRail && !isFullscreen
 
-        Scaffold(
-            modifier = Modifier
-                .fillMaxSize()
-                .onKeyEvent { event ->
-                    if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
-                        if (navController.previousBackStackEntry != null) {
-                            navController.popBackStack()
-                            true
+        val layoutDirection = LocalLayoutDirection.current
+        val navBarBottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        val leftSysInset = WindowInsets.displayCutout.union(WindowInsets.navigationBars)
+            .asPaddingValues()
+            .calculateLeftPadding(layoutDirection)
+        val sideRailStartClearance = if (showNavRail) {
+            calculateSideRailStartClearance(
+                style = navbarStyle,
+                isCompactHeight = windowDimensions.isCompactHeight,
+                leftSysInset = leftSysInset
+            )
+        } else {
+            0.dp
+        }
+        val navigationLayoutState = NavigationLayoutState(
+            hasBottomNav = showBottomNav,
+            hasSideRail = showNavRail,
+            isRailFloating = showNavRail && navbarStyle == com.netvio.data.preferences.NavbarStyle.FLOATING,
+            isCompactRail = windowDimensions.isCompactHeight,
+            sideRailStartClearance = sideRailStartClearance,
+            bottomNavClearance = 94.dp + navBarBottomInset
+        )
+
+        val onSelectNavTab: (NavTab) -> Unit = { tab ->
+            navbarVisible.value = true
+            if (tab == NavTab.HOME) {
+                navController.popBackStack(NavTab.HOME.route, inclusive = false)
+            } else {
+                navController.navigate(tab.route) {
+                    popUpTo(navController.graph.startDestinationId) {
+                        saveState = true
+                    }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
+        }
+        val onReselectNavTab: (NavTab) -> Unit = { tab ->
+            navbarVisible.value = true
+            val currentDest = navController.currentDestination?.route
+            if (currentDest != null && currentDest != tab.route) {
+                navController.popBackStack(tab.route, inclusive = false)
+            } else {
+                coroutineScope.launch {
+                    tabReselectionEvents.emit(tab)
+                }
+            }
+        }
+
+        LaunchedEffect(showNavRail) {
+            if (showNavRail) {
+                navbarVisible.value = true
+            }
+        }
+
+        CompositionLocalProvider(
+            LocalNavigationLayout provides navigationLayoutState,
+            LocalWindowDimensions provides windowDimensions
+        ) {
+            Scaffold(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                            if (navController.previousBackStackEntry != null) {
+                                navController.popBackStack()
+                                true
+                            } else {
+                                false
+                            }
                         } else {
                             false
                         }
-                    } else {
-                        false
-                    }
-                },
-            containerColor = MaterialTheme.colorScheme.background,
-            contentWindowInsets = WindowInsets(0, 0, 0, 0)
-        ) { innerPadding ->
-            Box(modifier = Modifier.fillMaxSize()) {
-                Row(modifier = Modifier.fillMaxSize()) {
-                        if (showNavRail) {
-                            AdaptiveNavigationRail(
-                                currentRoute = currentRoute,
-                                onTabSelected = { tab ->
-                                    navController.navigate(tab.route) {
-                                        popUpTo(navController.graph.startDestinationId) {
-                                            saveState = true
-                                        }
-                                        launchSingleTop = true
-                                        restoreState = true
-                                    }
-                                },
-                                onTabReselected = { tab ->
-                                    val currentDest = navController.currentDestination?.route
-                                    if (currentDest != null && currentDest != tab.route) {
-                                        navController.popBackStack(tab.route, inclusive = false)
-                                    } else {
-                                        coroutineScope.launch {
-                                            tabReselectionEvents.emit(tab)
-                                        }
-                                    }
-                                }
-                            )
-                        }
-
+                    },
+                containerColor = MaterialTheme.colorScheme.background,
+                contentWindowInsets = WindowInsets(0, 0, 0, 0)
+            ) { innerPadding ->
+                Box(modifier = Modifier.fillMaxSize()) {
                     NavHost(
                         navController = navController,
                         startDestination = NavTab.HOME.route,
@@ -1307,36 +1349,26 @@ fun AppNavHost(
                     onBack = { navController.popBackStack() }
                 )
             }
-        }
-    }
+                }
+
+            if (showNavRail) {
+                FrostedNavigationRail(
+                    currentRoute = currentRoute,
+                    style = navbarStyle,
+                    isCompactHeight = windowDimensions.isCompactHeight,
+                    isVisible = navbarVisible.value,
+                    onTabSelected = onSelectNavTab,
+                    onTabReselected = onReselectNavTab,
+                    modifier = Modifier.align(Alignment.CenterStart)
+                )
+            }
 
             if (showBottomNav) {
                 FloatingNavbar(
                     currentRoute = currentRoute,
                     style = navbarStyle,
-                    onTabSelected = { tab ->
-                        if (tab == NavTab.HOME) {
-                            navController.popBackStack(NavTab.HOME.route, inclusive = false)
-                        } else {
-                            navController.navigate(tab.route) {
-                                popUpTo(navController.graph.startDestinationId) {
-                                    saveState = true
-                                }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        }
-                    },
-                    onTabReselected = { tab ->
-                        val currentDest = navController.currentDestination?.route
-                        if (currentDest != null && currentDest != tab.route) {
-                            navController.popBackStack(tab.route, inclusive = false)
-                        } else {
-                            coroutineScope.launch {
-                                tabReselectionEvents.emit(tab)
-                            }
-                        }
-                    },
+                    onTabSelected = onSelectNavTab,
+                    onTabReselected = onReselectNavTab,
                     isVisible = navbarVisible.value,
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
@@ -1360,7 +1392,8 @@ fun AppNavHost(
             )
         }
     }
-}
+        }
+    }
 }
 
 @Composable

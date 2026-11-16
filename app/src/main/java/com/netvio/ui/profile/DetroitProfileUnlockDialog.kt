@@ -16,8 +16,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -45,6 +49,9 @@ import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.NetvioGlassTokens
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.LocalReduceMotion
+import com.netvio.ui.theme.Dimens
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
+import com.netvio.ui.theme.rememberWindowDimensions
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -164,9 +171,13 @@ fun DetroitProfileUnlockDialog(
                 ),
             contentAlignment = Alignment.Center
         ) {
+            val windowDims = rememberWindowDimensions()
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.90f)
+                    .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false)
+                    .widthIn(max = if (windowDims.isCompactHeight) 560.dp else Dimens.maxDialogWidth)
+                    .fillMaxWidth()
+                    .heightIn(max = windowDims.dialogMaxHeight())
                     .graphicsLayer {
                         alpha = animVal
                         scaleX = cardScale
@@ -195,10 +206,88 @@ fun DetroitProfileUnlockDialog(
                         indication = null,
                         onClick = {} // block click through
                     )
-                    .padding(24.dp),
+                    .padding(if (windowDims.isCompactHeight) 18.dp else 24.dp),
             ) {
+                if (windowDims.isCompactHeight) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(20.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(0.95f),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            AvatarWithThinRing(
+                                avatarId = profile.avatarId,
+                                avatarSize = 52.dp,
+                                ringGap = 4.dp,
+                                ringBorderWidth = 0.5.dp,
+                                ringColor = Color.White.copy(alpha = 0.20f)
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = profile.name,
+                                style = NetvioGlassTokens.HeaderTitle,
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Enter 4-digit PIN to access",
+                                style = NetvioGlassTokens.HeaderSubtitle,
+                            )
+                            Spacer(modifier = Modifier.height(14.dp))
+                            PinDots(
+                                pinLength = enteredPin.length,
+                                isError = isError
+                            )
+                            if (errorMessage != null) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = errorMessage ?: "",
+                                    style = TextStyle(
+                                        fontFamily = AppFontFamily,
+                                        fontWeight = FontWeight.Normal,
+                                        fontSize = 12.sp,
+                                        color = Color.White,
+                                    )
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (onSwitchProfileClick != null) {
+                                    ProfileGlassPill(
+                                        text = "Switch Profile",
+                                        onClick = onSwitchProfileClick,
+                                        visualHeight = 36.dp,
+                                        fontSize = 12
+                                    )
+                                }
+                                ProfileGlassPill(
+                                    text = "Cancel",
+                                    onClick = onDismissRequest,
+                                    visualHeight = 36.dp,
+                                    fontSize = 12
+                                )
+                            }
+                        }
+
+                        PinKeypad(
+                            onDigitClick = ::onDigitPress,
+                            onBackspaceClick = ::onBackspacePress,
+                            buttonSize = 50.dp,
+                            modifier = Modifier.weight(1.05f)
+                        )
+                    }
+                } else {
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     // Profile Avatar with thin white hairline ring
@@ -272,6 +361,7 @@ fun DetroitProfileUnlockDialog(
                             fontSize = 13
                         )
                     }
+                }
                 }
             }
         }

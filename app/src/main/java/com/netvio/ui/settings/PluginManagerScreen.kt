@@ -278,15 +278,16 @@ fun PluginManagerScreen(
     // Modal Sheet: Add Source Options
     if (showAddSourceSheet) {
         val isAmoled = LocalAmoledMode.current
+        val uiBlurEnabled = LocalUiBlurEnabled.current
         val isLowEnd = remember(context) { context.isLowEndDevice() }
-        val sheetBg = when {
-            isLowEnd -> PluginsGlassTokens.SheetGlassFallback
-            isAmoled -> PluginsGlassTokens.SheetGlassAmoledFill
-            else -> PluginsGlassTokens.SheetGlassFill
-        }
+        val sheetBg = NetvioGlassTokens.sheetWindowFill(
+            isAmoled = isAmoled,
+            blurEnabled = uiBlurEnabled && !isLowEnd
+        )
 
         ModalBottomSheet(
             onDismissRequest = { showAddSourceSheet = false },
+            sheetMaxWidth = Dimens.maxSheetWidth,
             shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp, bottomStart = 0.dp, bottomEnd = 0.dp),
             containerColor = sheetBg,
             scrimColor = Color.Black.copy(alpha = 0.60f),
@@ -309,6 +310,7 @@ fun PluginManagerScreen(
                 }
             }
         ) {
+            ApplyWindowBlurEffect(enabled = uiBlurEnabled && !isLowEnd)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -692,11 +694,13 @@ private fun InstalledTabContent(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            start = horizontalMargin,
-            end = horizontalMargin,
+        contentPadding = rememberCenteredContentPadding(
+            maxContentWidth = Dimens.maxWideContentWidth,
+            baseStart = horizontalMargin,
+            baseEnd = horizontalMargin,
             top = Dimens.spacing8,
-            bottom = 48.dp
+            bottom = 48.dp,
+            includeRailClearance = false
         ),
         verticalArrangement = Arrangement.spacedBy(Dimens.spacing12)
     ) {
@@ -1017,11 +1021,13 @@ private fun MarketplaceTabContent(
         // LEVEL 1: PROVIDER BOXES OVERVIEW
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(
-                start = horizontalMargin,
-                end = horizontalMargin,
+            contentPadding = rememberCenteredContentPadding(
+                maxContentWidth = Dimens.maxWideContentWidth,
+                baseStart = horizontalMargin,
+                baseEnd = horizontalMargin,
                 top = Dimens.spacing8,
-                bottom = 48.dp
+                bottom = 48.dp,
+                includeRailClearance = false
             ),
             verticalArrangement = Arrangement.spacedBy(Dimens.spacing12)
         ) {
@@ -1093,11 +1099,13 @@ private fun MarketplaceTabContent(
         // LEVEL 2: PLUGINS LIST FOR SELECTED PROVIDER
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(
-                start = horizontalMargin,
-                end = horizontalMargin,
+            contentPadding = rememberCenteredContentPadding(
+                maxContentWidth = Dimens.maxWideContentWidth,
+                baseStart = horizontalMargin,
+                baseEnd = horizontalMargin,
                 top = Dimens.spacing8,
-                bottom = 48.dp
+                bottom = 48.dp,
+                includeRailClearance = false
             ),
             verticalArrangement = Arrangement.spacedBy(Dimens.spacing12)
         ) {
@@ -1432,11 +1440,13 @@ private fun RepositoriesTabContent(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            start = horizontalMargin,
-            end = horizontalMargin,
+        contentPadding = rememberCenteredContentPadding(
+            maxContentWidth = Dimens.maxWideContentWidth,
+            baseStart = horizontalMargin,
+            baseEnd = horizontalMargin,
             top = Dimens.spacing8,
-            bottom = 48.dp
+            bottom = 48.dp,
+            includeRailClearance = false
         ),
         verticalArrangement = Arrangement.spacedBy(Dimens.spacing12)
     ) {

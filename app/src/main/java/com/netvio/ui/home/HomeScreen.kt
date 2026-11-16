@@ -86,7 +86,9 @@ import com.netvio.ui.components.TopHeaderBar
 import com.netvio.ui.components.TopTenRow
 import com.netvio.ui.navigation.ObserveScrollForNavbar
 import com.netvio.ui.theme.Accent
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
 import com.netvio.ui.theme.LocalAmoledMode
+import com.netvio.ui.theme.LocalNavigationLayout
 import com.netvio.ui.theme.AppTypography
 import com.netvio.ui.theme.SurfaceMid
 import com.netvio.ui.theme.Background
@@ -623,12 +625,13 @@ fun HomeScreen(
                             }
 
                             // Bottom Spacer for Navigation Bar clearance (dynamic system insets)
-                            val bottomSpacerHeight = if (windowDimensions.isPhone) {
-                                Dimens.navBarHeight + navBarBottom + Dimens.spacing16
-                            } else {
-                                navBarBottom + Dimens.spacing24
-                            }
                             item(key = "home_bottom_spacer", contentType = "spacer") {
+                                val navLayout = LocalNavigationLayout.current
+                                val bottomSpacerHeight = if (navLayout.hasBottomNav) {
+                                    Dimens.navBarHeight + navBarBottom + Dimens.spacing16
+                                } else {
+                                    navBarBottom + Dimens.spacing24
+                                }
                                 Spacer(modifier = Modifier.height(bottomSpacerHeight))
                             }
                         }
@@ -647,7 +650,7 @@ fun HomeScreen(
             label = "HeaderPreviewAlpha"
         )
 
-        // Pinned Top Header Bar, Offline Banner & Update Banner (outside hazeSource, samples homeHazeState)
+        // Pinned Top Header Bar & Offline Banner (outside hazeSource, samples homeHazeState)
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -661,7 +664,9 @@ fun HomeScreen(
                 scrollFraction = { headerScrollFraction },
                 hazeState = if (isPreviewActive) null else homeHazeState
             )
-            OfflineBanner()
+            Box(modifier = Modifier.adaptiveHorizontalSafePadding()) {
+                OfflineBanner()
+            }
         }
 
     // Long-Press Quick Actions Host (sits on top of blurred hazeSource content)

@@ -21,9 +21,10 @@ data class RawHttpResponse(
 
 private val baseRawClient: okhttp3.OkHttpClient by lazy {
     DohDns.sharedBaseClient.newBuilder()
-        .callTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-        .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .callTimeout(28, java.util.concurrent.TimeUnit.SECONDS)
+        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(28, java.util.concurrent.TimeUnit.SECONDS)
+        .writeTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
         .build()
 }
 

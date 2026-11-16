@@ -50,6 +50,7 @@ import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.HairlineWidth
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.LocalReduceMotion
+import com.netvio.ui.theme.LocalUiBlurEnabled
 import com.netvio.R
 
 /**
@@ -78,9 +79,9 @@ object PlayerTokens {
     val StandardGlassBlur: Dp = 18.dp
 
     /** Sheet & Side Panel Glass (sitting over scrim, not direct video) */
-    val SheetGlassFill = Color(0xFF0B0B0F).copy(alpha = 0.74f)
-    val SheetGlassAmoledFill = Color(0xFF050507).copy(alpha = 0.88f)
-    val LowEndFallbackFill = Color(0xFF0B0B0F).copy(alpha = 0.94f)
+    val SheetGlassFill = Color(0xFF0F1219).copy(alpha = 0.62f)
+    val SheetGlassAmoledFill = Color(0xFF06070A).copy(alpha = 0.68f)
+    val LowEndFallbackFill = Color(0xFF0B0B0F).copy(alpha = 0.95f)
     val SheetGlassBorder = Color.White.copy(alpha = 0.16f)
     val SheetGlassBlur: Dp = 22.dp
 
@@ -397,11 +398,12 @@ fun Modifier.sheetGlass(
     border: Boolean = true
 ): Modifier = composed {
     val isAmoled = LocalAmoledMode.current
+    val uiBlurEnabled = LocalUiBlurEnabled.current
     val context = LocalContext.current
     val isLowEnd = remember(context) { context.isLowEndDevice() }
 
     val bgColor = when {
-        isLowEnd -> PlayerTokens.LowEndFallbackFill
+        !uiBlurEnabled || isLowEnd -> PlayerTokens.LowEndFallbackFill
         isAmoled -> PlayerTokens.SheetGlassAmoledFill
         else -> PlayerTokens.SheetGlassFill
     }

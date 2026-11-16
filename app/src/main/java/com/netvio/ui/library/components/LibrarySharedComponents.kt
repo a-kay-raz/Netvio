@@ -59,6 +59,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
@@ -90,6 +91,7 @@ import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.NetvioGlassTokens
 import com.netvio.ui.theme.LocalReduceMotion
+import com.netvio.ui.theme.LocalUiBlurEnabled
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -107,11 +109,12 @@ fun Modifier.libraryGlassSurface(
     hazeState: HazeState? = null,
     isActive: Boolean = false,
     alphaFill: Float = 0.07f
-): Modifier {
-    return this
+): Modifier = composed {
+    val uiBlurEnabled = LocalUiBlurEnabled.current
+    this
         .clip(shape)
         .then(
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
+            if (uiBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
                 Modifier.hazeEffect(state = hazeState) {
                     blurRadius = NetvioGlassTokens.BlurRadius
                     tints = listOf(HazeTint(Color.White.copy(alpha = alphaFill)))

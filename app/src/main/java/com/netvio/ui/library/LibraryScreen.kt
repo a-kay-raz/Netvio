@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
@@ -94,6 +95,8 @@ import com.netvio.ui.library.tabs.PlaylistDetailView
 import com.netvio.ui.library.tabs.PlaylistsTab
 import com.netvio.ui.library.tabs.SavedWallTab
 import com.netvio.ui.theme.LocalReduceMotion
+import com.netvio.ui.theme.LocalWindowDimensions
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
 import com.netvio.ui.theme.pressable
 import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.launch
@@ -133,6 +136,7 @@ fun LibraryScreen(
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
     val hapticFeedback = LocalHapticFeedback.current
+    val windowDimensions = LocalWindowDimensions.current
     val reduceMotion = LocalReduceMotion.current
     val snackbarController = LocalSnackbarController.current
     val navbarVisible = com.netvio.ui.navigation.LocalNavbarVisible.current
@@ -218,7 +222,7 @@ fun LibraryScreen(
         showCreatePlaylistDialog ||
         showConfirmDeleteDialog
 
-    androidx.compose.runtime.DisposableEffect(shouldHideNavbar) {
+    androidx.compose.runtime.DisposableEffect(shouldHideNavbar, windowDimensions.useSideNavigationRail) {
         navbarVisible.value = !shouldHideNavbar
         onDispose {
             navbarVisible.value = true
@@ -335,7 +339,11 @@ fun LibraryScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .adaptiveHorizontalSafePadding(
+                            baseStart = windowDimensions.horizontalMargin,
+                            baseEnd = windowDimensions.horizontalMargin
+                        )
+                        .padding(vertical = if (windowDimensions.isCompactHeight) 8.dp else 12.dp)
                 ) {
                     val isDownloadsTab = pagerState.currentPage == 0
                     val selectableIds = remember(isDownloadsTab, downloads, items, isOfflineOnly, downloadsMap) {
@@ -361,7 +369,11 @@ fun LibraryScreen(
                             ) {
                                 Text(
                                     text = "Library",
-                                    style = LibraryTypography.pageHeadline,
+                                    style = if (windowDimensions.isCompactHeight) {
+                                        LibraryTypography.pageHeadline.copy(fontSize = 26.sp, lineHeight = 32.sp)
+                                    } else {
+                                        LibraryTypography.pageHeadline
+                                    },
                                     modifier = Modifier.semantics { heading() }
                                 )
 
@@ -459,7 +471,10 @@ fun LibraryScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp),
+                                .adaptiveHorizontalSafePadding(
+                                    baseStart = windowDimensions.horizontalMargin,
+                                    baseEnd = windowDimensions.horizontalMargin
+                                ),
                             horizontalArrangement = Arrangement.spacedBy(28.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -719,8 +734,10 @@ fun LibraryScreen(
             ) + fadeOut(tween(140)),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp)
                 .navigationBarsPadding()
                 .padding(bottom = 20.dp)
+                .widthIn(max = 460.dp)
         ) {
             val count = selectedItemIds.size
             val actionLabel = if (pagerState.currentPage == 0) {

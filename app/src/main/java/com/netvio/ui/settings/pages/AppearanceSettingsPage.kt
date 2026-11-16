@@ -68,6 +68,7 @@ fun AppearanceSettingsPage(
     val longPressStyle by viewModel.longPressStyle.collectAsState()
     val reduceMotion by viewModel.reduceMotion.collectAsState()
     val amoledMode by viewModel.amoledMode.collectAsState()
+    val uiBlurEnabled by viewModel.uiBlurEnabled.collectAsState()
 
     var showResetDialog by remember { mutableStateOf(false) }
 
@@ -272,6 +273,14 @@ fun AppearanceSettingsPage(
             subtitle = "Disables intense physics-based spring animations",
             checked = reduceMotion,
             onCheckedChange = { viewModel.setReduceMotion(it) },
+            hazeState = hazeState
+        )
+
+        OpenSettingsToggleRow(
+            title = "Glass blur effects",
+            subtitle = "Adds frosted blur behind menus and popups. Uses extra GPU power — turn off for faster, smoother performance on slower phones.",
+            checked = uiBlurEnabled,
+            onCheckedChange = { viewModel.setUiBlurEnabled(it) },
             hazeState = hazeState
         )
 

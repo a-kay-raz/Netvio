@@ -40,6 +40,9 @@ import com.netvio.ui.settings.PluginManagerViewModel
 import com.netvio.ui.settings.plugins.*
 import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.LocalAmoledMode
+import com.netvio.ui.theme.Dimens
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
+import com.netvio.ui.theme.rememberCenteredContentPadding
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 
@@ -176,12 +179,17 @@ fun RepoPluginsScreen(
             .background(pageBg)
             .statusBarsPadding()
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             // Top Bar: Back button, title block, bulk action
             Row(
                 modifier = Modifier
+                    .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false)
+                    .widthIn(max = Dimens.maxWideContentWidth)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -324,9 +332,10 @@ fun RepoPluginsScreen(
             ) {
                 Row(
                     modifier = Modifier
+                        .widthIn(max = Dimens.maxWideContentWidth)
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp),
+                        .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     CATEGORY_FILTERS.forEach { cat ->
@@ -404,8 +413,10 @@ fun RepoPluginsScreen(
                     // 6 Skeleton shimmer rows with 1.6s animation
                     Column(
                         modifier = Modifier
+                            .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false)
+                            .widthIn(max = Dimens.maxWideContentWidth)
                             .fillMaxSize()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                            .padding(vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         repeat(6) {
@@ -473,7 +484,14 @@ fun RepoPluginsScreen(
                     val navBarBottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 24.dp + navBarBottomInset)
+                        contentPadding = rememberCenteredContentPadding(
+                            maxContentWidth = Dimens.maxWideContentWidth,
+                            baseStart = 20.dp,
+                            baseEnd = 20.dp,
+                            top = 8.dp,
+                            bottom = 24.dp + navBarBottomInset,
+                            includeRailClearance = false
+                        )
                     ) {
                         items(filteredPlugins.distinctBy { it.id }, key = { it.id }) { plugin ->
                             val isInstalled = isPluginInstalled(plugin)
@@ -519,6 +537,7 @@ fun RepoPluginsScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
+                .adaptiveHorizontalSafePadding(includeRailClearance = false)
                 .padding(bottom = 16.dp)
         )
     }

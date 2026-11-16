@@ -63,6 +63,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
@@ -92,6 +93,7 @@ import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.LocalReduceMotion
 import com.netvio.ui.theme.playButtonSpringPress
 import com.netvio.ui.theme.pressable
+import com.netvio.ui.theme.LocalUiBlurEnabled
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -258,7 +260,8 @@ fun Modifier.searchGlassSurface(
     hazeState: HazeState? = null,
     isActive: Boolean = false,
     hasGlow: Boolean = false
-): Modifier {
+): Modifier = composed {
+    val uiBlurEnabled = LocalUiBlurEnabled.current
     val borderBrush = Brush.verticalGradient(
         listOf(
             Color.White.copy(alpha = if (isActive) 0.40f else 0.24f),
@@ -266,10 +269,10 @@ fun Modifier.searchGlassSurface(
         )
     )
 
-    return this
+    this
         .clip(shape)
         .then(
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
+            if (uiBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
                 Modifier.hazeEffect(state = hazeState) {
                     blurRadius = 18.dp
                     tints = listOf(HazeTint(SearchTokens.GlassFill))

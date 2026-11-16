@@ -11,6 +11,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -44,8 +45,12 @@ import com.netvio.ui.components.NetvioGlassDialog
 import com.netvio.ui.settings.components.*
 import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.LocalReduceMotion
+import com.netvio.download.DownloadEngine
+import com.netvio.download.DownloadRepository
+import com.netvio.download.DownloadStorageVolume
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -98,6 +103,9 @@ fun StorageSettingsPage(
     val wifiOnlyDownloads by viewModel.wifiOnlyDownloads.collectAsState()
 
     var showClearConfirmation by remember { mutableStateOf(false) }
+    var showDownloadVolumeDialog by remember { mutableStateOf(false) }
+    var availableDownloadVolumes by remember { mutableStateOf<List<DownloadStorageVolume>>(emptyList()) }
+    var unwritablePathWarning by remember { mutableStateOf<String?>(null) }
     var isDrainAnimating by remember { mutableStateOf(false) }
     var startingDrainBytes by remember { mutableStateOf(0L) }
 
@@ -151,24 +159,16 @@ fun StorageSettingsPage(
                 val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 context.contentResolver.takePersistableUriPermission(uri, flags)
             } catch (_: Exception) {}
-            val resolvedPath = try {
-                val docId = android.provider.DocumentsContract.getTreeDocumentId(uri)
-                val split = docId.split(":")
-                val type = split.getOrNull(0) ?: ""
-                val relativePath = split.getOrNull(1)?.trim('/') ?: ""
-                if (type.equals("primary", ignoreCase = true)) {
-                    val base = android.os.Environment.getExternalStorageDirectory().absolutePath
-                    if (relativePath.isNotEmpty()) "$base/$relativePath" else base
-                } else if (type.isNotBlank()) {
-                    if (relativePath.isNotEmpty()) "/storage/$type/$relativePath" else "/storage/$type"
+            val resolvedPath = DownloadEngine.resolveTreeUriToPath(uri)
+            coroutineScope.launch {
+                val isWritable = viewModel.isDirectoryWritable(resolvedPath)
+                if (isWritable) {
+                    viewModel.setCustomDownloadDir(resolvedPath)
+                    Toast.makeText(context, "Download directory updated", Toast.LENGTH_SHORT).show()
                 } else {
-                    uri.path ?: uri.toString()
+                    unwritablePathWarning = resolvedPath
                 }
-            } catch (_: Exception) {
-                uri.path ?: uri.toString()
             }
-            viewModel.setCustomDownloadDir(resolvedPath)
-            Toast.makeText(context, "Download directory updated", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -523,7 +523,12 @@ fun StorageSettingsPage(
                     }
                     SettingsPillButton(
                         text = "Change",
-                        onClick = { folderPickerLauncher.launch(null) },
+                        onClick = {
+                            coroutineScope.launch {
+                                availableDownloadVolumes = viewModel.getAvailableDownloadVolumes()
+                                showDownloadVolumeDialog = true
+                            }
+                        },
                         hazeState = hazeState
                     )
                 }
@@ -598,6 +603,105 @@ fun StorageSettingsPage(
                 icon = Icons.Outlined.CleaningServices,
                 onConfirm = { triggerCacheClear() },
                 onDismiss = { showClearConfirmation = false }
+            )
+        }
+
+        if (showDownloadVolumeDialog) {
+            val activeDirPath = customDownloadDir ?: viewModel.defaultDownloadDir
+            NetvioGlassDialog(
+                title = "Download location",
+                message = "Choose a verified app storage volume so direct, HLS, and torrent downloads save cleanly.",
+                confirmText = "Browse Folder",
+                dismissText = "Cancel",
+                icon = Icons.Outlined.CheckCircleOutline,
+                itemPreview = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        availableDownloadVolumes.forEach { volume ->
+                            val isSelected = activeDirPath == volume.directory.absolutePath ||
+                                (customDownloadDir.isNullOrBlank() && volume.isDefault)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(
+                                        if (isSelected) Color.White.copy(alpha = 0.12f)
+                                        else Color.White.copy(alpha = 0.05f)
+                                    )
+                                    .border(
+                                        width = if (isSelected) 1.dp else SettingsTokens.HairlineWidth,
+                                        color = if (isSelected) SettingsTokens.HairlineBorderBright
+                                        else SettingsTokens.HairlineBorder,
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable {
+                                        val nextDir = if (volume.isDefault) null else volume.directory.absolutePath
+                                        viewModel.setCustomDownloadDir(nextDir)
+                                        showDownloadVolumeDialog = false
+                                        Toast.makeText(
+                                            context,
+                                            "Download storage set to ${volume.label}",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = volume.label,
+                                        style = TextStyle(
+                                            fontFamily = AppFontFamily,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = Color.White
+                                        )
+                                    )
+                                    Text(
+                                        text = "${DownloadRepository.formatBytes(volume.availableBytes)} free",
+                                        style = TextStyle(
+                                            fontFamily = AppFontFamily,
+                                            fontSize = 11.sp,
+                                            color = SettingsTokens.TextWhite54,
+                                            fontFeatureSettings = "tnum"
+                                        )
+                                    )
+                                }
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.CheckCircleOutline,
+                                        contentDescription = "Selected",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                onConfirm = {
+                    showDownloadVolumeDialog = false
+                    folderPickerLauncher.launch(null)
+                },
+                onDismiss = { showDownloadVolumeDialog = false }
+            )
+        }
+
+        if (unwritablePathWarning != null) {
+            NetvioGlassDialog(
+                title = "Folder not supported",
+                message = "Android restricts direct file and torrent writes to \"$unwritablePathWarning\".\n\nPlease select an app storage volume (Internal Storage or SD Card) instead.",
+                confirmText = "Choose App Storage",
+                dismissText = "Dismiss",
+                icon = Icons.Outlined.ErrorOutline,
+                onConfirm = {
+                    unwritablePathWarning = null
+                    coroutineScope.launch {
+                        availableDownloadVolumes = viewModel.getAvailableDownloadVolumes()
+                        showDownloadVolumeDialog = true
+                    }
+                },
+                onDismiss = { unwritablePathWarning = null }
             )
         }
 

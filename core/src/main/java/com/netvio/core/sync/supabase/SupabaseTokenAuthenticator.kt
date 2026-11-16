@@ -11,8 +11,9 @@ import okhttp3.Route
 class SupabaseTokenAuthenticator(
     private val authClient: SupabaseAuthClient,
     private val sessionProvider: () -> SupabaseSession?,
-    private val onSessionRefreshed: (SupabaseSession) -> Unit,
-    private val onSessionExpired: () -> Unit
+    private val onSessionRefreshed: suspend (SupabaseSession) -> Unit,
+    private val onSessionExpired: suspend () -> Unit,
+    private val suspendSessionProvider: (suspend () -> SupabaseSession?)? = null
 ) : Authenticator {
 
     private val refreshMutex = Mutex()
@@ -25,7 +26,9 @@ class SupabaseTokenAuthenticator(
 
         val originalRequest = response.request
         val authHeader = originalRequest.header("Authorization") ?: ""
-        val currentSession = sessionProvider() ?: return null
+        val currentSession = sessionProvider()
+            ?: suspendSessionProvider?.let { runBlocking { it.invoke() } }
+            ?: return null
 
         // If the token used in the request is already different from currentSession, someone already refreshed it
         val bearerToken = if (authHeader.startsWith("Bearer ")) authHeader.substring(7) else ""
@@ -35,26 +38,14 @@ class SupabaseTokenAuthenticator(
                 .build()
         }
 
-        // Single-flight refresh protected by Mutex
+        // Single-flight refresh protected by Mutex; persists rotated refresh token before returning
         val newSession = runBlocking {
             refreshMutex.withLock {
-                val latestSession = sessionProvider()
+                val latestSession = sessionProvider() ?: suspendSessionProvider?.invoke()
                 if (latestSession != null && latestSession.accessToken != bearerToken && !isTokenExpiredOrNear(latestSession)) {
                     return@withLock latestSession
                 }
-
-                val refreshResult = authClient.refreshSession(latestSession?.refreshToken ?: currentSession.refreshToken)
-                if (refreshResult.isSuccess) {
-                    val refreshed = refreshResult.getOrThrow()
-                    onSessionRefreshed(refreshed)
-                    refreshed
-                } else {
-                    val errMsg = refreshResult.exceptionOrNull()?.message ?: ""
-                    if (isPermanentAuthRejection(errMsg)) {
-                        onSessionExpired()
-                    }
-                    null
-                }
+                performRefreshLocked(latestSession ?: currentSession)
             }
         } ?: return null
 
@@ -64,28 +55,32 @@ class SupabaseTokenAuthenticator(
     }
 
     suspend fun getValidAccessToken(): String? {
-        val session = sessionProvider() ?: return null
+        val session = sessionProvider() ?: suspendSessionProvider?.invoke() ?: return null
         if (!isTokenExpiredOrNear(session)) {
             return session.accessToken
         }
 
         return refreshMutex.withLock {
-            val freshSession = sessionProvider() ?: return@withLock null
+            val freshSession = sessionProvider() ?: suspendSessionProvider?.invoke() ?: return@withLock null
             if (!isTokenExpiredOrNear(freshSession)) {
                 return@withLock freshSession.accessToken
             }
-            val res = authClient.refreshSession(freshSession.refreshToken)
-            if (res.isSuccess) {
-                val updated = res.getOrThrow()
-                onSessionRefreshed(updated)
-                updated.accessToken
-            } else {
-                val errMsg = res.exceptionOrNull()?.message ?: ""
-                if (isPermanentAuthRejection(errMsg)) {
-                    onSessionExpired()
-                }
-                null
+            performRefreshLocked(freshSession)?.accessToken
+        }
+    }
+
+    private suspend fun performRefreshLocked(targetSession: SupabaseSession): SupabaseSession? {
+        val res = authClient.refreshSession(targetSession.refreshToken)
+        return if (res.isSuccess) {
+            val updated = res.getOrThrow()
+            onSessionRefreshed(updated)
+            updated
+        } else {
+            val errMsg = res.exceptionOrNull()?.message ?: ""
+            if (isPermanentAuthRejection(errMsg)) {
+                onSessionExpired()
             }
+            null
         }
     }
 

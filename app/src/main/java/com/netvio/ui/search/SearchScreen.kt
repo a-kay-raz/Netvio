@@ -82,6 +82,8 @@ import com.netvio.ui.theme.LocalReduceMotion
 import com.netvio.ui.theme.WindowWidthClass
 import com.netvio.ui.theme.pressable
 import com.netvio.ui.theme.rememberWindowDimensions
+import com.netvio.ui.theme.LocalNavigationLayout
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.delay
@@ -122,7 +124,9 @@ fun SearchScreen(
     val context = LocalContext.current
     val reduceMotion = LocalReduceMotion.current
     val windowDimensions = rememberWindowDimensions()
-    val isWideScreen = windowDimensions.widthClass != WindowWidthClass.Compact
+    val navLayout = LocalNavigationLayout.current
+    val isWideScreen = windowDimensions.isWideViewport
+    val listBottomClearance = navLayout.recommendedBottomContentPadding
 
     val searchHazeState = rememberHazeState()
     val scope = rememberCoroutineScope()
@@ -201,8 +205,13 @@ fun SearchScreen(
 
     val searchListState = rememberLazyListState()
     val resultsListState = rememberLazyListState()
+    val navbarVisible = com.netvio.ui.navigation.LocalNavbarVisible.current
 
-    // Animate floating navbar hide on scroll down, show on scroll up
+    LaunchedEffect(Unit) {
+        navbarVisible.value = true
+    }
+
+    // Animate floating navbar hide on scroll down, show on scroll up (bottom navbar only)
     if (isResultsActive) {
         ObserveScrollForNavbar(resultsListState)
     } else {
@@ -253,6 +262,7 @@ fun SearchScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .adaptiveHorizontalSafePadding()
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
@@ -275,7 +285,7 @@ fun SearchScreen(
                         )
                         .padding(horizontal = 20.dp)
                 ) {
-                    // 1. Collapsing Top Headline: "Find\nsomething."
+                    // 1. Collapsing Top Headline: "Find\nsomething." (single compact line in compact landscape height)
                     AnimatedVisibility(
                         visible = !isResultsActive,
                         enter = if (reduceMotion) fadeIn(tween(0)) else (
@@ -293,29 +303,49 @@ fun SearchScreen(
                             )
                         )
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 16.dp, bottom = 8.dp),
-                            contentAlignment = Alignment.CenterStart
-                        ) {
-                            Column(modifier = Modifier.fillMaxWidth()) {
+                        if (windowDimensions.isCompactHeight) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 6.dp, bottom = 6.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
                                 Text(
-                                    text = "Find",
-                                    style = SearchTokens.LargeHeadline,
+                                    text = "Find something.",
+                                    style = SearchTokens.LargeHeadline.copy(fontSize = 26.sp, lineHeight = 30.sp),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.graphicsLayer {
                                         alpha = headlineAnim1.value
-                                        translationY = (1f - headlineAnim1.value) * 12.dp.toPx()
+                                        translationY = (1f - headlineAnim1.value) * 8.dp.toPx()
                                     }
                                 )
-                                Text(
-                                    text = "something.",
-                                    style = SearchTokens.LargeHeadline,
-                                    modifier = Modifier.graphicsLayer {
-                                        alpha = headlineAnim2.value
-                                        translationY = (1f - headlineAnim2.value) * 12.dp.toPx()
-                                    }
-                                )
+                            }
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 16.dp, bottom = 8.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Text(
+                                        text = "Find",
+                                        style = SearchTokens.LargeHeadline,
+                                        modifier = Modifier.graphicsLayer {
+                                            alpha = headlineAnim1.value
+                                            translationY = (1f - headlineAnim1.value) * 12.dp.toPx()
+                                        }
+                                    )
+                                    Text(
+                                        text = "something.",
+                                        style = SearchTokens.LargeHeadline,
+                                        modifier = Modifier.graphicsLayer {
+                                            alpha = headlineAnim2.value
+                                            translationY = (1f - headlineAnim2.value) * 12.dp.toPx()
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -591,7 +621,7 @@ fun SearchScreen(
                             // ----------------------------------------------------
                             LazyColumn(
                                 state = searchListState,
-                                contentPadding = PaddingValues(bottom = 110.dp, top = 8.dp),
+                                contentPadding = PaddingValues(bottom = listBottomClearance, top = 8.dp),
                                 modifier = Modifier.fillMaxSize()
                             ) {
                                 // 1. Recent Searches Section (hidden if empty, collapses on Clear All)
@@ -830,7 +860,7 @@ fun SearchScreen(
 
                             LazyColumn(
                                 state = resultsListState,
-                                contentPadding = PaddingValues(bottom = 110.dp, top = 8.dp),
+                                contentPadding = PaddingValues(bottom = listBottomClearance, top = 8.dp),
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .graphicsLayer { alpha = listAlpha }
@@ -1371,7 +1401,7 @@ fun SearchScreen(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .navigationBarsPadding()
-                        .padding(bottom = 96.dp)
+                        .padding(bottom = if (navLayout.hasBottomNav) 96.dp else 20.dp)
                 )
 
                 // Auto-dismiss toast after 4 seconds

@@ -141,6 +141,7 @@ class PreferencesRepository private constructor(private val context: Context) {
         val PLAYBACK_BUFFER_SIZE_MB = intPreferencesKey("playback_buffer_size_mb")
         val HARDWARE_ACCELERATION_ENABLED = booleanPreferencesKey("hardware_acceleration_enabled")
         val AMOLED_MODE = booleanPreferencesKey("amoled_mode")
+        val UI_BLUR_ENABLED = booleanPreferencesKey("ui_blur_enabled")
         val SMART_FAILOVER_ENABLED = booleanPreferencesKey("smart_failover_enabled")
         val AUDIO_PASSTHROUGH_ENABLED = booleanPreferencesKey("audio_passthrough_enabled")
 
@@ -166,6 +167,11 @@ class PreferencesRepository private constructor(private val context: Context) {
         val SUPABASE_SYNC_WATCHLIST = booleanPreferencesKey("supabase_sync_watchlist")
         val SUPABASE_SYNC_PLAYLISTS = booleanPreferencesKey("supabase_sync_playlists")
         val SUPABASE_SYNC_SETTINGS = booleanPreferencesKey("supabase_sync_settings")
+        val SUPABASE_LAST_PULL_TIMESTAMP = longPreferencesKey("supabase_last_pull_timestamp")
+        val SUPABASE_HASH_PROFILES = stringPreferencesKey("supabase_hash_profiles")
+        val SUPABASE_HASH_SETTINGS = stringPreferencesKey("supabase_hash_settings")
+        val SUPABASE_HASH_ADDONS = stringPreferencesKey("supabase_hash_addons")
+        val SUPABASE_HASH_PLAYLISTS = stringPreferencesKey("supabase_hash_playlists")
     }
     val dohProvider: Flow<String> = context.preferencesDataStore.data
         .catch { exception ->
@@ -852,6 +858,20 @@ class PreferencesRepository private constructor(private val context: Context) {
         }
     }
 
+    val uiBlurEnabled: Flow<Boolean> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.UI_BLUR_ENABLED] ?: true
+        }
+        .distinctUntilChanged()
+
+    suspend fun setUiBlurEnabled(enabled: Boolean) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.UI_BLUR_ENABLED] = enabled
+        }
+    }
     val favoriteMediaIds: Flow<Set<String>> = context.preferencesDataStore.data
         .catch { exception ->
             if (exception is IOException) emit(emptyPreferences()) else throw exception
@@ -1051,6 +1071,80 @@ class PreferencesRepository private constructor(private val context: Context) {
 
     suspend fun clearSupabaseSession() {
         setSupabaseSession(null)
+        clearSupabaseSyncCache()
+    }
+
+    val supabaseLastPullTimestamp: Flow<Long> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.SUPABASE_LAST_PULL_TIMESTAMP] ?: 0L
+        }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseLastPullTimestamp(timestamp: Long) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.SUPABASE_LAST_PULL_TIMESTAMP] = timestamp
+        }
+    }
+
+    val supabaseHashProfiles: Flow<String?> = context.preferencesDataStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[PreferencesKeys.SUPABASE_HASH_PROFILES] }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseHashProfiles(hash: String?) {
+        context.preferencesDataStore.edit { prefs ->
+            if (hash != null) prefs[PreferencesKeys.SUPABASE_HASH_PROFILES] = hash
+            else prefs.remove(PreferencesKeys.SUPABASE_HASH_PROFILES)
+        }
+    }
+
+    val supabaseHashSettings: Flow<String?> = context.preferencesDataStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[PreferencesKeys.SUPABASE_HASH_SETTINGS] }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseHashSettings(hash: String?) {
+        context.preferencesDataStore.edit { prefs ->
+            if (hash != null) prefs[PreferencesKeys.SUPABASE_HASH_SETTINGS] = hash
+            else prefs.remove(PreferencesKeys.SUPABASE_HASH_SETTINGS)
+        }
+    }
+
+    val supabaseHashAddons: Flow<String?> = context.preferencesDataStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[PreferencesKeys.SUPABASE_HASH_ADDONS] }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseHashAddons(hash: String?) {
+        context.preferencesDataStore.edit { prefs ->
+            if (hash != null) prefs[PreferencesKeys.SUPABASE_HASH_ADDONS] = hash
+            else prefs.remove(PreferencesKeys.SUPABASE_HASH_ADDONS)
+        }
+    }
+
+    val supabaseHashPlaylists: Flow<String?> = context.preferencesDataStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[PreferencesKeys.SUPABASE_HASH_PLAYLISTS] }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseHashPlaylists(hash: String?) {
+        context.preferencesDataStore.edit { prefs ->
+            if (hash != null) prefs[PreferencesKeys.SUPABASE_HASH_PLAYLISTS] = hash
+            else prefs.remove(PreferencesKeys.SUPABASE_HASH_PLAYLISTS)
+        }
+    }
+
+    suspend fun clearSupabaseSyncCache() {
+        context.preferencesDataStore.edit { prefs ->
+            prefs.remove(PreferencesKeys.SUPABASE_LAST_PULL_TIMESTAMP)
+            prefs.remove(PreferencesKeys.SUPABASE_HASH_PROFILES)
+            prefs.remove(PreferencesKeys.SUPABASE_HASH_SETTINGS)
+            prefs.remove(PreferencesKeys.SUPABASE_HASH_ADDONS)
+            prefs.remove(PreferencesKeys.SUPABASE_HASH_PLAYLISTS)
+        }
     }
 
     val supabaseLastSyncTimestamp: Flow<Long> = context.preferencesDataStore.data
@@ -1267,6 +1361,7 @@ class PreferencesRepository private constructor(private val context: Context) {
         prefs[PreferencesKeys.SECTION_LABEL_STYLE]?.let { result["section_label_style"] = it }
         prefs[PreferencesKeys.LONG_PRESS_STYLE]?.let { result["long_press_style"] = it }
         prefs[PreferencesKeys.AMOLED_MODE]?.let { result["amoled_mode"] = it.toString() }
+        prefs[PreferencesKeys.UI_BLUR_ENABLED]?.let { result["ui_blur_enabled"] = it.toString() }
         prefs[PreferencesKeys.DEFAULT_QUALITY]?.let { result["default_quality"] = it }
         prefs[PreferencesKeys.AUTO_PLAY_NEXT_EPISODE]?.let { result["auto_play_next_episode"] = it.toString() }
         prefs[PreferencesKeys.SEEK_INTERVAL_SECONDS]?.let { result["seek_interval_seconds"] = it.toString() }
@@ -1308,6 +1403,7 @@ class PreferencesRepository private constructor(private val context: Context) {
             settings["section_label_style"]?.let { prefs[PreferencesKeys.SECTION_LABEL_STYLE] = it }
             settings["long_press_style"]?.let { prefs[PreferencesKeys.LONG_PRESS_STYLE] = it }
             settings["amoled_mode"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.AMOLED_MODE] = it }
+            settings["ui_blur_enabled"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.UI_BLUR_ENABLED] = it }
             settings["default_quality"]?.let { prefs[PreferencesKeys.DEFAULT_QUALITY] = it }
             settings["auto_play_next_episode"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.AUTO_PLAY_NEXT_EPISODE] = it }
             settings["seek_interval_seconds"]?.toIntOrNull()?.let { prefs[PreferencesKeys.SEEK_INTERVAL_SECONDS] = it }

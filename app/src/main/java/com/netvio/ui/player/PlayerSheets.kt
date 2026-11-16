@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Subtitles
+import com.netvio.ui.theme.Dimens
 import com.netvio.ui.theme.LocalReduceMotion
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -69,8 +70,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.netvio.ui.components.tvFocusable
+import com.netvio.ui.theme.ApplyWindowBlurEffect
+import com.netvio.ui.theme.NetvioGlassTokens
 import com.netvio.ui.theme.HairlineWidth
 import com.netvio.ui.theme.LocalAmoledMode
+import com.netvio.ui.theme.LocalUiBlurEnabled
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.defaultMinSize
@@ -1153,16 +1157,17 @@ fun SearchingFooter(count: Int) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ServerBottomSheet(
-    availableServers: List<ServerSourceOption>,
-    selectedServer: ServerSourceOption?,
-    isSearching: Boolean = false,
-    contentName: String = "",
-    onServerSelected: (ServerSourceOption) -> Unit,
-    onDismissRequest: () -> Unit
+private fun PlayerGlassModalSheet(
+    onDismissRequest: () -> Unit,
+    sheetState: androidx.compose.material3.SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
     val isAmoled = LocalAmoledMode.current
-    val containerBg = if (isAmoled) PlayerTokens.SheetGlassAmoledFill else PlayerTokens.SheetGlassFill
+    val uiBlurEnabled = LocalUiBlurEnabled.current
+    val containerBg = NetvioGlassTokens.sheetWindowFill(
+        isAmoled = isAmoled,
+        blurEnabled = uiBlurEnabled
+    )
     val context = androidx.compose.ui.platform.LocalContext.current
 
     LaunchedEffect(Unit) {
@@ -1171,12 +1176,12 @@ fun ServerBottomSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = sheetState,
+        sheetMaxWidth = Dimens.maxSheetWidth,
         shape = PlayerTokens.RadiusBottomSheet,
         containerColor = containerBg,
         scrimColor = PlayerTokens.SheetScrim,
         dragHandle = {
-            // 36 by 4 dp drag handle
             Box(
                 modifier = Modifier
                     .padding(vertical = 12.dp)
@@ -1187,6 +1192,28 @@ fun ServerBottomSheet(
             )
         }
     ) {
+        ApplyWindowBlurEffect(enabled = uiBlurEnabled)
+        content()
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ServerBottomSheet(
+    availableServers: List<ServerSourceOption>,
+    selectedServer: ServerSourceOption?,
+    isSearching: Boolean = false,
+    contentName: String = "",
+    onServerSelected: (ServerSourceOption) -> Unit,
+    onDismissRequest: () -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    LaunchedEffect(Unit) {
+        com.netvio.core.p2p.P2pStreamingEngine.prewarmEngine(context)
+    }
+
+    PlayerGlassModalSheet(onDismissRequest = onDismissRequest) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1280,25 +1307,7 @@ fun StreamAndAudioSheet(
     onAudioTrackSelected: (AudioTrackOption) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val isAmoled = LocalAmoledMode.current
-    val containerBg = if (isAmoled) PlayerTokens.SheetGlassAmoledFill else PlayerTokens.SheetGlassFill
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        shape = PlayerTokens.RadiusBottomSheet,
-        containerColor = containerBg,
-        scrimColor = PlayerTokens.SheetScrim,
-        dragHandle = {
-            Box(
-                modifier = Modifier
-                    .padding(vertical = 12.dp)
-                    .width(36.dp)
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Color.White.copy(alpha = 0.40f))
-            )
-        }
-    ) {
+    PlayerGlassModalSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1380,25 +1389,7 @@ fun QualityBottomSheet(
     onQualitySelected: (VideoQualityOption) -> Unit,
     onDismissRequest: () -> Unit
 ) {
-    val isAmoled = LocalAmoledMode.current
-    val containerBg = if (isAmoled) PlayerTokens.SheetGlassAmoledFill else PlayerTokens.SheetGlassFill
-
-    ModalBottomSheet(
-        onDismissRequest = onDismissRequest,
-        shape = PlayerTokens.RadiusBottomSheet,
-        containerColor = containerBg,
-        scrimColor = PlayerTokens.SheetScrim,
-        dragHandle = {
-            Box(
-                modifier = Modifier
-                    .padding(vertical = 12.dp)
-                    .width(36.dp)
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Color.White.copy(alpha = 0.40f))
-            )
-        }
-    ) {
+    PlayerGlassModalSheet(onDismissRequest = onDismissRequest) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1478,25 +1469,7 @@ fun SubtitlesBottomSheet(
     onSubtitleSelected: (SubtitleOption) -> Unit,
     onDismissRequest: () -> Unit
 ) {
-    val isAmoled = LocalAmoledMode.current
-    val containerBg = if (isAmoled) PlayerTokens.SheetGlassAmoledFill else PlayerTokens.SheetGlassFill
-
-    ModalBottomSheet(
-        onDismissRequest = onDismissRequest,
-        shape = PlayerTokens.RadiusBottomSheet,
-        containerColor = containerBg,
-        scrimColor = PlayerTokens.SheetScrim,
-        dragHandle = {
-            Box(
-                modifier = Modifier
-                    .padding(vertical = 12.dp)
-                    .width(36.dp)
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Color.White.copy(alpha = 0.40f))
-            )
-        }
-    ) {
+    PlayerGlassModalSheet(onDismissRequest = onDismissRequest) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1576,25 +1549,7 @@ fun AudioBottomSheet(
     onAudioTrackSelected: (AudioTrackOption) -> Unit,
     onDismissRequest: () -> Unit
 ) {
-    val isAmoled = LocalAmoledMode.current
-    val containerBg = if (isAmoled) PlayerTokens.SheetGlassAmoledFill else PlayerTokens.SheetGlassFill
-
-    ModalBottomSheet(
-        onDismissRequest = onDismissRequest,
-        shape = PlayerTokens.RadiusBottomSheet,
-        containerColor = containerBg,
-        scrimColor = PlayerTokens.SheetScrim,
-        dragHandle = {
-            Box(
-                modifier = Modifier
-                    .padding(vertical = 12.dp)
-                    .width(36.dp)
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Color.White.copy(alpha = 0.40f))
-            )
-        }
-    ) {
+    PlayerGlassModalSheet(onDismissRequest = onDismissRequest) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()

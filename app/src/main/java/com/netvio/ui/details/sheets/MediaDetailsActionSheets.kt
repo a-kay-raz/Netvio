@@ -47,6 +47,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -124,6 +125,9 @@ import com.netvio.ui.theme.AppFontFamily
 import com.netvio.ui.theme.NetvioGlassTokens
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.LocalReduceMotion
+import com.netvio.ui.theme.Dimens
+import com.netvio.ui.theme.LocalUiBlurEnabled
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -253,6 +257,7 @@ fun MediaDetailsActionSheet(
     }
 
     val isAmoled = LocalAmoledMode.current
+    val uiBlurEnabled = LocalUiBlurEnabled.current
     val animValue = sheetProgress.value
     val maxSheetHeight = (configuration.screenHeightDp * 0.85f).dp
     var sheetHeightPx by remember { mutableFloatStateOf(0f) }
@@ -283,6 +288,8 @@ fun MediaDetailsActionSheet(
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .adaptiveHorizontalSafePadding(includeRailClearance = false)
+                .widthIn(max = Dimens.maxSheetWidth)
                 .fillMaxWidth()
                 .heightIn(max = maxSheetHeight)
                 .onGloballyPositioned { coordinates ->
@@ -327,7 +334,7 @@ fun MediaDetailsActionSheet(
                 )
                 .clip(sheetShape)
                 .then(
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
+                    if (uiBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
                         Modifier.hazeEffect(state = hazeState) {
                             blurRadius = NetvioGlassTokens.BlurRadius
                             tints = listOf(HazeTint(sheetFill))

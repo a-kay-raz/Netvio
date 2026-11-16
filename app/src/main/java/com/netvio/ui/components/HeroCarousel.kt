@@ -116,6 +116,7 @@ import com.netvio.ui.theme.Background
 import com.netvio.ui.theme.Dimens
 import com.netvio.ui.theme.HairlineWidth
 import com.netvio.ui.theme.LocalAmoledMode
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
 import com.netvio.ui.theme.LocalReduceMotion
 import com.netvio.ui.theme.rememberReduceMotion
 import com.netvio.ui.theme.Motion
@@ -182,20 +183,15 @@ fun HeroCarousel(
     val density = LocalDensity.current
 
     val windowDimensions = rememberWindowDimensions()
-    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val isLargeScreen = windowDimensions.isTablet || windowDimensions.isTV
 
-    // Responsive carousel height: adapts between portrait phone, landscape phone, and tablets/TVs
-    val carouselHeight = if (isLandscape) {
-        if (isLargeScreen) {
-            (configuration.screenHeightDp * 0.65f).coerceIn(400f, 600f).dp
-        } else {
-            (configuration.screenHeightDp * 0.85f).coerceIn(280f, 380f).dp
-        }
-    } else {
-        (configuration.screenHeightDp * 0.60f + 40f).coerceIn(480f, 600f).dp
+    // Responsive carousel height: adapts cleanly between portrait phone, compact landscape phone, tablets, and TVs
+    val carouselHeight = when {
+        windowDimensions.isTV -> (configuration.screenHeightDp * 0.60f + 40f).coerceIn(480f, 600f).dp
+        windowDimensions.isCompactHeight -> (configuration.screenHeightDp * 0.72f).coerceIn(240f, 320f).dp
+        windowDimensions.isTablet -> (configuration.screenHeightDp * 0.56f).coerceIn(380f, 540f).dp
+        else -> (configuration.screenHeightDp * 0.60f + 40f).coerceIn(480f, 600f).dp
     }
-    val contentBottomPadding = Dimens.spacing12
+    val contentBottomPadding = if (windowDimensions.isCompactHeight) Dimens.spacing12 else Dimens.spacing24
     val heroWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
     val maxStretchPx = with(density) { 180.dp.toPx() }
 
@@ -475,12 +471,21 @@ private fun BoxScope.HeroHudContent(
 
     // Clearance above centered pagination: 20dp gap + 2dp segment height
     val hudBottomPadding = if (itemsCount > 1) contentBottomPadding + 22.dp else contentBottomPadding
+    val windowDimensions = rememberWindowDimensions()
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (windowDimensions.isWideViewport) {
+                    Modifier.widthIn(max = 580.dp)
+                } else Modifier
+            )
             .align(Alignment.BottomStart)
-            .padding(horizontal = 16.dp)
+            .adaptiveHorizontalSafePadding(
+                baseStart = windowDimensions.horizontalMargin,
+                baseEnd = windowDimensions.horizontalMargin
+            )
             .padding(bottom = hudBottomPadding)
             .graphicsLayer {
                 val scrollExitAlpha = (1f - (scrollOffsetPx() / 320.dp.toPx())).coerceIn(0f, 1f)
@@ -489,16 +494,20 @@ private fun BoxScope.HeroHudContent(
             },
         horizontalAlignment = Alignment.Start
     ) {
-        // 1. Studio ClearLogo (or Text Fallback, max 70% screen width)
+        // 1. Studio ClearLogo (or Text Fallback)
         var isLogoError by remember(item.logoUrl) { mutableStateOf(false) }
-        val maxLogoWidth = (configuration.screenWidthDp * 0.70f).dp
+        val maxLogoWidth = if (windowDimensions.isWideViewport) {
+            minOf((configuration.screenWidthDp * 0.45f).dp, 420.dp)
+        } else {
+            (configuration.screenWidthDp * 0.70f).dp
+        }
         Box(
             modifier = Modifier
                 .graphicsLayer {
                     alpha = logoAlpha
                     translationY = logoRise
                 }
-                .padding(bottom = 12.dp)
+                .padding(bottom = if (windowDimensions.isCompactHeight) 8.dp else 12.dp)
         ) {
             if (!item.logoUrl.isNullOrBlank() && !isLogoError) {
                 val context = LocalContext.current
@@ -510,7 +519,10 @@ private fun BoxScope.HeroHudContent(
                         .build(),
                     contentDescription = item.title,
                     modifier = Modifier
-                        .heightIn(min = 40.dp, max = 64.dp)
+                        .heightIn(
+                            min = if (windowDimensions.isCompactHeight) 32.dp else 40.dp,
+                            max = if (windowDimensions.isCompactHeight) 48.dp else 64.dp
+                        )
                         .widthIn(max = maxLogoWidth),
                     contentScale = ContentScale.Fit,
                     alignment = Alignment.CenterStart,

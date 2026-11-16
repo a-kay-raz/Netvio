@@ -19,10 +19,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForwardIos
 import androidx.compose.material.icons.filled.PlaylistAdd
@@ -58,6 +62,9 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.netvio.ui.components.AppAsyncImage
+import com.netvio.ui.theme.Dimens
+import com.netvio.ui.theme.LocalWindowDimensions
+import com.netvio.ui.theme.adaptiveHorizontalSafePadding
 import kotlin.math.roundToInt
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
@@ -114,6 +121,7 @@ fun HeroPeekSheet(
     BackHandler { dismissWithAnim() }
 
     val configuration = LocalConfiguration.current
+    val windowDimensions = LocalWindowDimensions.current
     val maxHeight = (configuration.screenHeightDp * 0.78f).dp
     var sheetHeightPx by remember { mutableFloatStateOf(0f) }
 
@@ -133,6 +141,8 @@ fun HeroPeekSheet(
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .adaptiveHorizontalSafePadding(includeRailClearance = false)
+                .widthIn(max = Dimens.maxSheetWidth)
                 .fillMaxWidth()
                 .heightIn(max = maxHeight)
                 .offset { IntOffset(0, totalOffsetY.roundToInt()) }
@@ -168,12 +178,17 @@ fun HeroPeekSheet(
                 .then(LongPressSheetBorder)
                 .background(LongPressSheetBackground)
         ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                // 1. Backdrop Header (180 dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .navigationBarsPadding()
+            ) {
+                // 1. Backdrop Header (180 dp, compact on landscape phone)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(180.dp)
+                        .height(if (windowDimensions.isCompactHeight) 124.dp else 180.dp)
                 ) {
                     val backdropUrl = item.backdropUrl ?: item.posterUrl
                     AppAsyncImage(

@@ -78,6 +78,7 @@ import com.netvio.ui.theme.SurfaceLow
 import com.netvio.ui.theme.TextPrimary
 import com.netvio.ui.theme.TextSecondary
 import com.netvio.ui.theme.pressable
+import com.netvio.ui.theme.rememberAdaptiveHorizontalPadding
 import com.netvio.ui.theme.rememberWindowDimensions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -210,7 +211,10 @@ fun TopTenRow(
 
         LazyRow(
             state = topTenRowState,
-            contentPadding = PaddingValues(horizontal = windowDimensions.horizontalMargin),
+            contentPadding = rememberAdaptiveHorizontalPadding(
+                baseStart = windowDimensions.horizontalMargin,
+                baseEnd = windowDimensions.horizontalMargin
+            ),
             horizontalArrangement = Arrangement.spacedBy(horizontalGap),
             modifier = Modifier.fillMaxWidth()
         ) {

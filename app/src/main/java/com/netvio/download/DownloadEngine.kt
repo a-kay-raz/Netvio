@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Environment
+import android.os.StatFs
 import com.netvio.core.network.DohDns
 import com.netvio.data.preferences.PreferencesRepository
 import kotlinx.coroutines.*
@@ -11,12 +12,22 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.withPermit
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+
+data class DownloadStorageVolume(
+    val label: String,
+    val directory: File,
+    val availableBytes: Long,
+    val isRemovable: Boolean,
+    val isDefault: Boolean
+)
 
 /**
  * Resumable download engine supporting both direct progressive video files (MKV, MP4)
@@ -65,19 +76,138 @@ class DownloadEngine(private val context: Context) {
         if (!customPath.isNullOrBlank()) {
             val resolvedPath = resolveCustomDownloadPath(customPath)
             val customDir = File(resolvedPath)
-            if (customDir.exists() || customDir.mkdirs()) {
+            if (isDirectoryWritable(customDir)) {
                 return customDir
             }
+            android.util.Log.w(
+                "DownloadEngine",
+                "Configured download directory is not writable ($resolvedPath); falling back to app storage"
+            )
         }
-        val baseDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-            ?: File(context.filesDir, "downloads")
-        if (!baseDir.exists()) {
-            baseDir.mkdirs()
+        return resolveDefaultWritableDirectory()
+    }
+
+    /**
+     * Verifies actual POSIX file creation access rather than trusting `exists()` or `canWrite()`,
+     * which report false positives on Android 11+ Scoped Storage paths.
+     */
+    fun isDirectoryWritable(dir: File): Boolean {
+        var probe: File? = null
+        return try {
+            if (!dir.exists() && !dir.mkdirs()) return false
+            if (!dir.isDirectory) return false
+            probe = File(dir, ".netvio_write_probe_${Thread.currentThread().id}_${System.nanoTime()}")
+            FileOutputStream(probe).use { it.write(0) }
+            probe.exists()
+        } catch (_: Exception) {
+            false
+        } finally {
+            try {
+                probe?.delete()
+            } catch (_: Exception) {}
         }
-        return baseDir
+    }
+
+    fun isAppManagedDirectory(dir: File): Boolean {
+        val targetPath = try { dir.canonicalPath } catch (_: Exception) { dir.absolutePath }
+        val appRoots = mutableListOf<File>()
+        try { appRoots.add(context.filesDir) } catch (_: Exception) {}
+        try { context.getExternalFilesDir(null)?.let { appRoots.add(it) } } catch (_: Exception) {}
+        try { context.getExternalFilesDirs(null)?.filterNotNull()?.forEach { appRoots.add(it) } } catch (_: Exception) {}
+        return appRoots.any { root ->
+            val rootPath = try { root.canonicalPath } catch (_: Exception) { root.absolutePath }
+            targetPath == rootPath || targetPath.startsWith("$rootPath${File.separator}")
+        }
+    }
+
+    fun resolveWritableCustomPath(rawPath: String): String = resolveCustomDownloadPath(rawPath)
+
+    fun getAvailableWritableVolumes(): List<DownloadStorageVolume> {
+        val seenPaths = HashSet<String>()
+        val volumes = mutableListOf<DownloadStorageVolume>()
+        val defaultExternal = try { context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) } catch (_: Exception) { null }
+        val defaultCanonical = defaultExternal?.let { try { it.canonicalPath } catch (_: Exception) { it.absolutePath } }
+
+        val candidates = mutableListOf<File>()
+        if (defaultExternal != null) candidates.add(defaultExternal)
+        try {
+            context.getExternalFilesDirs(Environment.DIRECTORY_DOWNLOADS)?.filterNotNull()?.forEach {
+                candidates.add(it)
+            }
+        } catch (_: Exception) {}
+        try {
+            candidates.add(File(context.filesDir, "downloads"))
+        } catch (_: Exception) {}
+
+        var sdIndex = 1
+        for (dir in candidates) {
+            val canonical = try { dir.canonicalPath } catch (_: Exception) { dir.absolutePath }
+            if (!seenPaths.add(canonical)) continue
+            if (!isDirectoryWritable(dir)) continue
+
+            val isRemovable = try {
+                Environment.isExternalStorageRemovable(dir)
+            } catch (_: Exception) {
+                false
+            }
+            val isPrivate = try {
+                val filesCanonical = context.filesDir.canonicalPath
+                canonical == filesCanonical || canonical.startsWith("$filesCanonical${File.separator}")
+            } catch (_: Exception) {
+                false
+            }
+            val label = when {
+                isRemovable -> if (sdIndex == 1) "SD Card (App Storage)" else "SD Card $sdIndex (App Storage)"
+                isPrivate -> "Private App Storage"
+                else -> "Internal Storage (App Folder)"
+            }
+            if (isRemovable) sdIndex++
+
+            val available = try { StatFs(dir.path).availableBytes } catch (_: Exception) { 0L }
+            volumes.add(
+                DownloadStorageVolume(
+                    label = label,
+                    directory = dir,
+                    availableBytes = available,
+                    isRemovable = isRemovable,
+                    isDefault = (defaultCanonical != null && canonical == defaultCanonical) || (defaultCanonical == null && isPrivate)
+                )
+            )
+        }
+        return volumes
+    }
+
+    private fun resolveDefaultWritableDirectory(): File {
+        try {
+            val primary = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            if (primary != null && isDirectoryWritable(primary)) {
+                return primary
+            }
+        } catch (_: Exception) {}
+
+        try {
+            val externalDirs = context.getExternalFilesDirs(Environment.DIRECTORY_DOWNLOADS)
+            if (externalDirs != null) {
+                for (candidate in externalDirs) {
+                    if (candidate != null && isDirectoryWritable(candidate)) {
+                        return candidate
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        val internalFallback = File(context.filesDir, "downloads")
+        if (!internalFallback.exists()) {
+            internalFallback.mkdirs()
+        }
+        return internalFallback
     }
 
     companion object {
+        fun sanitizeFileId(id: String): String {
+            return id.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        }
+
         fun resolveTreeUriToPath(uri: android.net.Uri): String {
             return try {
                 val docId = android.provider.DocumentsContract.getTreeDocumentId(uri)
@@ -189,17 +319,39 @@ class DownloadEngine(private val context: Context) {
         onCompleted: (finalFilePath: String, totalBytes: Long) -> Unit,
         onError: (errorMessage: String) -> Unit
     ) = withContext(Dispatchers.IO) {
+        val queuedTotal = item.totalBytes.takeIf { it > 0L } ?: 0L
+        if (directDownloadSemaphore.availablePermits <= 0) {
+            onProgress(0L, queuedTotal, 0f, "Queued...")
+        } else {
+            onProgress(0L, queuedTotal, 0f, "Connecting...")
+        }
         directDownloadSemaphore.withPermit {
+            onProgress(0L, queuedTotal, 0f, "Connecting...")
             val dir = getDownloadDirectory()
+            if (!isDirectoryWritable(dir)) {
+                onError("Download folder is not writable")
+                return@withPermit
+            }
+            val safeId = sanitizeFileId(item.id)
             val ext = inferExtension(cleanUrl)
             val safeFilename = sanitizeFilename(item.title)
-            val partFile = File(dir, "${item.id}.part")
-            val finalFile = File(dir, "$safeFilename-${item.id}.$ext")
+            val partFile = File(dir, "$safeId.part")
+            if (!partFile.exists() && safeId != item.id) {
+                val legacyPart = File(dir, "${item.id}.part")
+                if (legacyPart.exists()) {
+                    try { legacyPart.renameTo(partFile) } catch (_: Exception) {}
+                }
+            }
+            val finalFile = File(dir, "$safeFilename-$safeId.$ext")
 
             var currentUrl = cleanUrl
             var retryCount = 0
             val maxRetries = 4
             var totalBytes = item.totalBytes.takeIf { it > 0 } ?: 0L
+            // Only server-provided Content-Length / Content-Range is valid for premature-EOF detection;
+            // UI fallback estimates (e.g. "~2.0 GB") must not falsely reject shorter completed streams.
+            var authoritativeTotalBytes = 0L
+            var skipRangeOnNextRequest = false
             var isDownloadComplete = false
 
             var lastProgressUpdateMs = System.currentTimeMillis()
@@ -208,8 +360,7 @@ class DownloadEngine(private val context: Context) {
             while (!isDownloadComplete && coroutineContext.isActive) {
                 var existingBytes = if (partFile.exists()) partFile.length() else 0L
 
-                // If existing bytes already meet or exceed totalBytes (and totalBytes > 0), verify and complete
-                if (totalBytes > 0L && existingBytes >= totalBytes) {
+                if (authoritativeTotalBytes > 0L && existingBytes >= authoritativeTotalBytes) {
                     isDownloadComplete = true
                     break
                 }
@@ -221,11 +372,12 @@ class DownloadEngine(private val context: Context) {
 
                 applyHeaders(requestBuilder, currentUrl, item.headers)
 
-                if (existingBytes > 0L) {
+                if (existingBytes > 0L && !skipRangeOnNextRequest) {
                     requestBuilder.header("Range", "bytes=$existingBytes-")
                 }
+                skipRangeOnNextRequest = false
 
-                var response: okhttp3.Response? = null
+                var response: Response? = null
                 try {
                     response = client.newCall(requestBuilder.build()).execute()
                 } catch (e: Exception) {
@@ -252,44 +404,44 @@ class DownloadEngine(private val context: Context) {
                 val isPartial = code == 206
                 val isOk = resp.isSuccessful
 
-                // Resiliency: If server rejected Range with 403 or 416, retry without Range from start
-                if ((code == 403 || code == 416) && existingBytes > 0L && retryCount < maxRetries) {
+                if (code == 416 && existingBytes > 0L) {
+                    val rangeTotal = parseContentRangeTotal(resp.header("Content-Range"))
                     resp.close()
-                    if (code == 416 && totalBytes > 0L && existingBytes >= (totalBytes * 0.95)) {
-                        // File was actually finished!
+                    val knownTotal = rangeTotal.takeIf { it > 0L } ?: authoritativeTotalBytes
+                    if (knownTotal > 0L && existingBytes >= (knownTotal * 0.95)) {
                         isDownloadComplete = true
                         break
                     }
-                    retryCount++
-                    if (code == 401 || code == 403) {
-                        val refreshedUrl = tryRefreshToken(item, currentUrl)
-                        if (refreshedUrl != null) {
-                            currentUrl = refreshedUrl
+                    if (retryCount < maxRetries) {
+                        retryCount++
+                        if (rangeTotal > 0L && existingBytes > rangeTotal) {
+                            partFile.delete()
+                            existingBytes = 0L
+                        } else {
+                            skipRangeOnNextRequest = true
                         }
+                        continue
+                    } else if (knownTotal <= 0L && existingBytes >= 100 * 1024L) {
+                        isDownloadComplete = true
+                        break
                     }
-                    partFile.delete()
-                    existingBytes = 0L
-                    continue
                 }
 
                 if (!isOk && !isPartial) {
+                    val errStatusMsg = resp.message
                     resp.close()
-                    if (code == 401 || code == 403) {
-                        if (retryCount < maxRetries) {
-                            retryCount++
-                            val refreshedUrl = tryRefreshToken(item, currentUrl)
-                            if (refreshedUrl != null) {
-                                currentUrl = refreshedUrl
-                                delay(1000L * retryCount)
-                                continue
-                            }
+                    if ((code == 401 || code == 403 || code == 410) && retryCount < maxRetries) {
+                        retryCount++
+                        val refreshedUrl = tryRefreshToken(item, currentUrl)
+                        if (refreshedUrl != null) {
+                            currentUrl = refreshedUrl
+                            delay(1000L * retryCount)
+                            continue
                         }
                     }
-                    if (code == 416) {
-                        if (partFile.exists() && partFile.length() > 0) {
-                            isDownloadComplete = true
-                            break
-                        }
+                    if (code == 416 && partFile.exists() && partFile.length() > 0L) {
+                        isDownloadComplete = true
+                        break
                     }
                     val errorMsg = when (code) {
                         402 -> "Payment required or traffic limit reached (HTTP 402)"
@@ -297,9 +449,8 @@ class DownloadEngine(private val context: Context) {
                         401 -> "Stream unauthorized (HTTP 401)"
                         404 -> "Video stream not found (HTTP 404)"
                         410 -> "Video stream expired or gone (HTTP 410)"
-                        else -> "HTTP Error $code: ${resp.message}"
+                        else -> "HTTP Error $code: $errStatusMsg"
                     }
-                    // Non-recoverable status codes
                     if (code == 404 || code == 410 || code == 402) {
                         onError(errorMsg)
                         return@withPermit
@@ -348,6 +499,7 @@ class DownloadEngine(private val context: Context) {
                 }
 
                 val contentLength = body.contentLength()
+                val contentRangeTotal = if (isPartial) parseContentRangeTotal(resp.header("Content-Range")) else 0L
 
                 // Validate Range response:
                 // If 206 Partial Content was returned, append to existing partial file
@@ -359,16 +511,22 @@ class DownloadEngine(private val context: Context) {
                     existingBytes = 0L
                 }
 
-                if (isPartial && contentLength > 0) {
-                    totalBytes = existingBytes + contentLength
-                } else if (contentLength > 0) {
-                    totalBytes = contentLength
-                } else if (totalBytes <= 0L) {
-                    totalBytes = item.totalBytes.takeIf { it > 0 } ?: 0L
+                val serverReportedTotal = when {
+                    contentRangeTotal > 0L -> contentRangeTotal
+                    isPartial && contentLength > 0L -> existingBytes + contentLength
+                    contentLength > 0L -> contentLength
+                    else -> 0L
+                }
+                if (serverReportedTotal > 0L) {
+                    authoritativeTotalBytes = serverReportedTotal
+                    totalBytes = serverReportedTotal
+                    val initialPct = (existingBytes.toFloat() / serverReportedTotal * 100f).coerceIn(0f, 100f)
+                    onProgress(existingBytes, serverReportedTotal, initialPct, "Downloading...")
                 }
 
                 var bytesReadTotal = existingBytes
                 var readError: Exception? = null
+                var storageErrorMsg: String? = null
 
                 try {
                     resp.use {
@@ -395,11 +553,12 @@ class DownloadEngine(private val context: Context) {
                                         } else 0L
 
                                         val speedStr = formatSpeed(speedBytesPerSec)
-                                        val percent = if (totalBytes > 0L) {
-                                            (bytesReadTotal.toFloat() / totalBytes * 100f).coerceIn(0f, 100f)
+                                        val effectiveTotal = authoritativeTotalBytes.takeIf { it > 0L } ?: totalBytes
+                                        val percent = if (effectiveTotal > 0L) {
+                                            (bytesReadTotal.toFloat() / effectiveTotal * 100f).coerceIn(0f, 100f)
                                         } else 0f
 
-                                        onProgress(bytesReadTotal, totalBytes, percent, speedStr)
+                                        onProgress(bytesReadTotal, effectiveTotal, percent, speedStr)
 
                                         lastProgressUpdateMs = now
                                         bytesReadSinceLastUpdate = 0L
@@ -413,7 +572,13 @@ class DownloadEngine(private val context: Context) {
                     if (!coroutineContext.isActive) {
                         return@withPermit
                     }
+                    storageErrorMsg = classifyStorageException(ioe)
                     readError = ioe
+                }
+
+                if (storageErrorMsg != null) {
+                    onError(storageErrorMsg)
+                    return@withPermit
                 }
 
                 // Check stream result after draining socket:
@@ -436,22 +601,18 @@ class DownloadEngine(private val context: Context) {
                     }
                 }
 
-                // Premature EOF detection:
-                // Server closed connection cleanly, but we received fewer bytes than totalBytes
-                if (totalBytes > 0L && currentFileLength < (totalBytes * 0.98)) {
+                // Premature EOF detection (only against server-authoritative length, never fallback estimates):
+                if (authoritativeTotalBytes > 0L && currentFileLength < (authoritativeTotalBytes * 0.98)) {
                     if (retryCount < maxRetries) {
                         retryCount++
                         delay(1000L * retryCount)
                         continue
                     } else {
-                        // Retries exhausted without completing stream; do NOT delete partFile!
-                        // Allow auto-recovery or subsequent retry to continue from currentFileLength.
                         onError("Waiting for network")
                         return@withPermit
                     }
                 }
 
-                // Stream finished successfully!
                 isDownloadComplete = true
             }
 
@@ -462,8 +623,7 @@ class DownloadEngine(private val context: Context) {
             if (finalFile.exists()) {
                 finalFile.delete()
             }
-            val renameSuccess = partFile.renameTo(finalFile)
-            val targetFile = if (renameSuccess) finalFile else partFile
+            val targetFile = relocateOrRenamePartFile(partFile, finalFile)
 
             // Safety check: Ensure downloaded file is valid and non-empty
             if (targetFile.length() < 100 * 1024L) {
@@ -512,33 +672,46 @@ class DownloadEngine(private val context: Context) {
         onError: (errorMessage: String) -> Unit
     ) = withContext(Dispatchers.IO) {
         val dir = getDownloadDirectory()
-        val safeFilename = sanitizeFilename(item.title)
-        val partFile = File(dir, "${item.id}.part")
+        if (!isDirectoryWritable(dir)) {
+            onError("Download folder is not writable")
+            return@withContext
+        }
+        val safeId = sanitizeFileId(item.id)
 
         // Initial progress notification
         val initialTotal = if (item.totalBytes > 0L) item.totalBytes else 0L
         onProgress(0L, initialTotal, 0f, "Connecting...")
 
-        // 1. Fetch playlist
-        val reqBuilder = Request.Builder().url(cleanUrl)
-        applyHeaders(reqBuilder, cleanUrl, item.headers)
+        // 1. Fetch playlist with transient retry & token refresh support
+        val primaryPlaylistFetch = fetchTextWithRetry(item, cleanUrl)
+        if (primaryPlaylistFetch == null) {
+            onError(if (!isNetworkAvailable()) "Waiting for network" else "Download interrupted: connection lost")
+            return@withContext
+        }
+        val (resolvedPlaylistUrl, playlistText) = primaryPlaylistFetch
 
-        val resp = client.newCall(reqBuilder.build()).execute()
-        if (!resp.isSuccessful) {
-            val code = resp.code
-            resp.close()
-            onError("HTTP Error $code fetching HLS stream")
+        if (playlistText.startsWith("HTTP_ERR:")) {
+            val parts = playlistText.removePrefix("HTTP_ERR:").split(":", limit = 2)
+            val code = parts.getOrNull(0)?.toIntOrNull() ?: 0
+            onError(
+                when (code) {
+                    401 -> "Stream unauthorized (HTTP 401)"
+                    402 -> "Payment required or traffic limit reached (HTTP 402)"
+                    403 -> "Stream access forbidden or signature expired (HTTP 403)"
+                    404 -> "Video stream not found (HTTP 404)"
+                    410 -> "Video stream expired or gone (HTTP 410)"
+                    else -> "HTTP Error $code fetching HLS stream"
+                }
+            )
             return@withContext
         }
 
-        val playlistText = resp.body?.string() ?: ""
-        resp.close()
         if (playlistText.isBlank() || !playlistText.contains("#EXTM3U")) {
             onError("Invalid HLS playlist response")
             return@withContext
         }
 
-        val baseUri = try { URI(cleanUrl) } catch (_: Exception) { null }
+        val baseUri = try { URI(resolvedPlaylistUrl) } catch (_: Exception) { null }
 
         // 2. If master playlist, resolve sub-playlist based on requested quality
         val (mediaPlaylistUrl, subPlaylistText) = if (playlistText.contains("#EXT-X-STREAM-INF")) {
@@ -575,25 +748,34 @@ class DownloadEngine(private val context: Context) {
                     }
                 }
             }
-            val targetSubUrl = selectedSubUrl ?: cleanUrl
-            val subReq = Request.Builder().url(targetSubUrl)
-            applyHeaders(subReq, targetSubUrl, item.headers)
-            val subResp = client.newCall(subReq.build()).execute()
-            if (!subResp.isSuccessful) {
-                val code = subResp.code
-                subResp.close()
+            val targetSubUrl = selectedSubUrl ?: resolvedPlaylistUrl
+            val subPlaylistFetch = fetchTextWithRetry(item, targetSubUrl)
+            if (subPlaylistFetch == null) {
+                onError(if (!isNetworkAvailable()) "Waiting for network" else "Download interrupted: connection lost")
+                return@withContext
+            }
+            val (subResolved, text) = subPlaylistFetch
+            if (text.startsWith("HTTP_ERR:")) {
+                val code = text.removePrefix("HTTP_ERR:").substringBefore(':').toIntOrNull() ?: 0
                 onError("HTTP Error $code fetching media segments")
                 return@withContext
             }
-            val text = subResp.body?.string() ?: ""
-            subResp.close()
-            targetSubUrl to text
+            subResolved to text
         } else {
-            cleanUrl to playlistText
+            resolvedPlaylistUrl to playlistText
         }
 
-        val itemDir = File(dir, item.id)
-        itemDir.mkdirs()
+        val itemDir = File(dir, safeId)
+        if (!itemDir.exists() && safeId != item.id) {
+            val legacyDir = File(dir, item.id)
+            if (legacyDir.exists()) {
+                try { legacyDir.renameTo(itemDir) } catch (_: Exception) {}
+            }
+        }
+        if (!itemDir.exists() && !itemDir.mkdirs()) {
+            onError("Unable to create download folder")
+            return@withContext
+        }
 
         val isFmp4 = subPlaylistText.contains("#EXT-X-MAP:") || subPlaylistText.contains(".m4s") || subPlaylistText.contains(".mp4")
         val segExt = if (isFmp4) "m4s" else "ts"
@@ -759,8 +941,18 @@ class DownloadEngine(private val context: Context) {
                                     }
                                 }
                             } catch (e: Exception) {
+                                val storageErr = classifyStorageException(e)
+                                if (storageErr != null) {
+                                    errorSignal.compareAndSet(null, storageErr)
+                                    return@withPermit
+                                }
                                 if (attempts >= 3) {
-                                    errorSignal.compareAndSet(null, "Failed to download segment ${idx + 1}/$totalSegments: ${e.localizedMessage}")
+                                    val msg = if (!isNetworkAvailable()) {
+                                        "Waiting for network"
+                                    } else {
+                                        "Failed to download segment ${idx + 1}/$totalSegments: ${e.localizedMessage ?: "connection interrupted"}"
+                                    }
+                                    errorSignal.compareAndSet(null, msg)
                                     return@withPermit
                                 }
                                 delay(400L * attempts)
@@ -897,12 +1089,20 @@ class DownloadEngine(private val context: Context) {
         com.netvio.core.p2p.P2pStreamingEngine.initialize(context)
 
         val dir = getDownloadDirectory()
+        if (!isDirectoryWritable(dir)) {
+            onError("Download folder is not writable")
+            return@withContext
+        }
+        val safeId = sanitizeFileId(item.id)
         val safeFilename = sanitizeFilename(item.title)
         val ext = inferExtension(p2pRequest.filename ?: item.title)
-        val finalFile = File(dir, "$safeFilename-${item.id}.$ext")
+        val finalFile = File(dir, "$safeFilename-$safeId.$ext")
+
+        onProgress(0L, 0L, 0f, "Queued...")
 
         p2pDownloadSemaphore.withPermit {
             try {
+                onProgress(0L, 0L, 0f, "Connecting peers...")
                 val downloadedFile = com.netvio.core.p2p.P2pStreamingEngine.downloadFileDirect(
                     request = p2pRequest,
                     destinationFile = finalFile,
@@ -917,7 +1117,12 @@ class DownloadEngine(private val context: Context) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                onError("P2P download interrupted: ${e.message}")
+                val storageErr = classifyStorageException(e)
+                when {
+                    storageErr != null -> onError(storageErr)
+                    !isNetworkAvailable() -> onError("Waiting for network")
+                    else -> onError("P2P download interrupted: ${e.message}")
+                }
             }
         }
     }
@@ -933,9 +1138,10 @@ class DownloadEngine(private val context: Context) {
 
         try {
             val dir = getDownloadDirectory()
+            val safeId = sanitizeFileId(id)
             val files = dir.listFiles() ?: return
             for (file in files) {
-                if (file.name.contains(id)) {
+                if (file.name.contains(id) || file.name.contains(safeId)) {
                     if (file.isDirectory) file.deleteRecursively() else file.delete()
                 }
             }
@@ -1024,6 +1230,86 @@ class DownloadEngine(private val context: Context) {
 
     private fun sanitizeFilename(name: String): String {
         return name.replace(Regex("[^a-zA-Z0-9.-]"), "_").take(40)
+    }
+
+    private suspend fun fetchTextWithRetry(
+        item: DownloadItem,
+        initialUrl: String,
+        maxRetries: Int = 3
+    ): Pair<String, String>? {
+        var currentUrl = initialUrl
+        var attempts = 0
+        var lastHttpError: Pair<Int, String>? = null
+        while (attempts < maxRetries && currentCoroutineContext().isActive) {
+            attempts++
+            var retryWithRefresh = false
+            try {
+                val req = Request.Builder().url(currentUrl)
+                applyHeaders(req, currentUrl, item.headers)
+                client.newCall(req.build()).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val body = resp.body?.string() ?: ""
+                        return currentUrl to body
+                    }
+                    val code = resp.code
+                    lastHttpError = code to resp.message
+                    if ((code == 401 || code == 403 || code == 410) && attempts < maxRetries) {
+                        val refreshed = tryRefreshToken(item, currentUrl)
+                        if (refreshed != null) {
+                            currentUrl = refreshed
+                            retryWithRefresh = true
+                        }
+                    }
+                    if (!retryWithRefresh && code in listOf(401, 402, 403, 404, 410)) {
+                        return currentUrl to "HTTP_ERR:$code:${resp.message}"
+                    }
+                }
+            } catch (_: Exception) {
+                if (!isNetworkAvailable()) {
+                    return null
+                }
+            }
+            if (attempts < maxRetries) {
+                delay(if (retryWithRefresh) 400L * attempts else 600L * attempts)
+            }
+        }
+        return lastHttpError?.let { (code, msg) -> currentUrl to "HTTP_ERR:$code:$msg" }
+    }
+
+    private fun parseContentRangeTotal(headerValue: String?): Long {
+        if (headerValue.isNullOrBlank()) return 0L
+        val totalPart = Regex("""/\s*(\d+)""").find(headerValue)?.groupValues?.get(1)
+        return totalPart?.toLongOrNull() ?: 0L
+    }
+
+    private fun classifyStorageException(error: Throwable): String? {
+        if (error is SecurityException) {
+            return "Storage permission denied: ${error.localizedMessage ?: "cannot write file"}"
+        }
+        if (error is FileNotFoundException || error is IOException) {
+            val msg = error.message?.lowercase().orEmpty()
+            return when {
+                msg.contains("enospc") || msg.contains("no space left") ->
+                    "Insufficient storage space on device"
+                msg.contains("eacces") || msg.contains("eperm") || msg.contains("permission denied") || msg.contains("operation not permitted") || msg.contains("erofs") || msg.contains("read-only") ->
+                    "Storage write denied (${error.localizedMessage ?: "unwritable folder"})"
+                else -> null
+            }
+        }
+        return null
+    }
+
+    private fun relocateOrRenamePartFile(partFile: File, finalFile: File): File {
+        if (partFile.renameTo(finalFile)) {
+            return finalFile
+        }
+        return try {
+            partFile.copyTo(finalFile, overwrite = true)
+            partFile.delete()
+            finalFile
+        } catch (_: Exception) {
+            partFile
+        }
     }
 
     private fun formatSpeed(bytesPerSec: Long): String {
