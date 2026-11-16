@@ -222,6 +222,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.core.FastOutSlowInEasing
 import com.netvio.ui.theme.LocalAmoledMode
+import com.netvio.ui.theme.LocalWindowDimensions
 import com.netvio.ui.theme.TextTertiary
 import com.netvio.ui.theme.adaptiveHorizontalSafePadding
 import com.netvio.ui.theme.pressable
