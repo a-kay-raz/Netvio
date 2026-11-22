@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import com.netvio.data.cache.HomeCatalogDiskCache
 import com.netvio.data.local.PlaybackHistoryEntity
 import com.netvio.data.repository.LibraryRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -468,6 +469,15 @@ class HomeViewModel(
         warmupJob?.cancel()
         if (!isPullToRefresh && rawCatalogRows.isEmpty()) {
             _uiState.value = HomeUiState.Loading
+            // Disk cache first: paint the last good catalog instantly on a cold
+            // start (the in-memory cache dies with the process, so a restart
+            // otherwise re-fetches all 17 TMDB feeds before first paint).
+            // The network fetch below replaces it with fresh rows.
+            val diskRows = HomeCatalogDiskCache.load(getApplication())
+            if (!diskRows.isNullOrEmpty()) {
+                processAndEmitRows(diskRows)
+                if (!coroutineContext.isActive) return
+            }
         }
         progressiveOffset = 0
         hasMoreRails = true
@@ -495,197 +505,10 @@ class HomeViewModel(
                 return
             }
 
-                // 2. Deterministic provider + session seed ensures carousel & feed change per provider and launch
-                val currentProvider = repository.activePlugin.value.name
-                val providerHash = currentProvider.hashCode().toLong()
-                val sessionIdx = AppSessionManager.getSessionIndex().toLong()
-                val combinedSeed = (providerHash * 37L) xor (sessionIdx * 10007L)
-                val providerRandom = kotlin.random.Random(combinedSeed)
-
-                // 3. Select hero candidates from the top visible TMDB rows so they never get diluted by Stremio rows.
-                // Hidden TMDB rows never reach this ViewModel (the repository
-                // filters them), so when no TMDB row is visible the hero falls
-                // back to all rows; when nothing is visible the hero is empty.
-                val pinnedCoreCount = 4.coerceAtMost(rows.size)
-
-                val tmdbRows = rows.filter { it.catalogKey?.startsWith("tmdb:") == true }
-                val heroSourceRows = tmdbRows.take(pinnedCoreCount).ifEmpty { rows }
-                val rawCandidates = heroSourceRows.flatMap { it.items }
-                    .filter { !it.backdropUrl.isNullOrBlank() || !it.posterUrl.isNullOrBlank() }
-                    .distinctBy { it.id }
-
-                val candidates = rawCandidates
-
-                val candidatesWithLogos = candidates.filter { !it.logoUrl.isNullOrBlank() }.shuffled(providerRandom)
-                val otherCandidates = candidates.filter { it.logoUrl.isNullOrBlank() }.shuffled(providerRandom)
-                val heroCandidatesToResolve = (candidatesWithLogos + otherCandidates).take(8)
-
-                // 4. Pick hero candidates now (items that already carry a logo
-                // go first). Missing logos resolve in the background AFTER the
-                // feed is shown (see below), so first paint never waits on
-                // them — on a slow connection the logo fetch alone cost up to
-                // 2.5s before anything appeared.
-                val heroCandidatesPool = heroCandidatesToResolve
-                val heroWithLogos = heroCandidatesPool.filter { !it.logoUrl.isNullOrBlank() }
-                val heroItems = if (heroWithLogos.size >= 4) {
-                    heroWithLogos.take(6)
-                } else {
-                    (heroWithLogos + heroCandidatesPool.filter { it.logoUrl.isNullOrBlank() }).take(6)
-                }
-
-                // 5. Keep core rows pinned at the top and keep every row in
-                // repository order, which already reflects the saved Catalog
-                // Manager order, visibility and titles; only rotate the item
-                // offset inside rows beyond the first 4 so repeat visits feel
-                // fresh. Rows are never shuffled here.
-                val processedRows = if (rows.size > pinnedCoreCount) {
-                    val pinnedRows = rows.take(pinnedCoreCount)
-                    val otherRows = rows.drop(pinnedCoreCount)
-                    pinnedRows + otherRows.map { row ->
-                        if (row.items.size > 4) {
-                            val offset = providerRandom.nextInt(row.items.size)
-                            row.copy(items = row.items.drop(offset) + row.items.take(offset))
-                        } else {
-                            row
-                        }
-                    }
-                } else {
-                    rows
-                }
-
-                val enrichedRows = processedRows.map { row ->
-                    val t = row.title.lowercase()
-                    when {
-                        t.contains("trend") -> row.copy(
-                            subtitle = row.subtitle ?: "Based on recent views",
-                            eyebrow = row.eyebrow ?: "RIGHT NOW"
-                        )
-                        t.contains("popular") -> row.copy(
-                            subtitle = row.subtitle ?: "Most watched this week",
-                            eyebrow = row.eyebrow ?: "FEATURED"
-                        )
-                        else -> row
-                    }
-                }
-
-                val distinctRowHeaders = deduplicateCatalogRows(enrichedRows)
-                rawCatalogRows = deduplicateProminentCatalogItems(distinctRowHeaders, maxRows = 3)
-                rawHeroItems = heroItems
-
-                // Compute bulletproof self-pruning tabs
-                val allItems = enrichedRows.flatMap { it.items }
-                val hasMovies = allItems.any { classifyItem(it, "") == HomeFilterTab.MOVIES }
-                val hasTv = allItems.any { classifyItem(it, "") == HomeFilterTab.TV_SHOWS }
-                val hasAnime = allItems.any { classifyItem(it, "") == HomeFilterTab.ANIME }
-                val hasTrending = enrichedRows.any {
-                    val t = it.title.lowercase()
-                    t.contains("trend") || t.contains("popular") || t.contains("featured") || t.contains("top")
-                }
-
-                val tabs = mutableListOf(HomeFilterTab.ALL)
-                if (hasMovies) tabs.add(HomeFilterTab.MOVIES)
-                if (hasTv) tabs.add(HomeFilterTab.TV_SHOWS)
-                if (hasAnime) tabs.add(HomeFilterTab.ANIME)
-                if (hasTrending) tabs.add(HomeFilterTab.TRENDING)
-                computedTabs = tabs
-
-                if (_selectedTab.value !in tabs) {
-                    _selectedTab.value = HomeFilterTab.ALL
-                }
-
-                val rowsMap = computedTabs.associateWith { tab -> filterRowsForTab(tab, enrichedRows) }
-                val filtered = rowsMap[_selectedTab.value] ?: filterRowsForTab(_selectedTab.value, enrichedRows)
-
-                if (!coroutineContext.isActive) return
-                // 6. Emit Success IMMEDIATELY so the home feed appears instantaneously
-                _uiState.value = HomeUiState.Success(
-                    heroItems = heroItems,
-                    catalogRows = enrichedRows,
-                    availableTabs = computedTabs,
-                    filteredRows = filtered,
-                    rowsByTab = rowsMap
-                )
-
-                // 5. Preload images asynchronously in background without blocking UI
-                viewModelScope.launch(Dispatchers.IO) {
-                    val app = getApplication<Application>()
-                    val imageLoader = app.imageLoader
-
-                    val heroUrls = heroItems.flatMap { item ->
-                        listOfNotNull(item.backdropUrl, item.logoUrl)
-                    }
-                    val visiblePosterUrls = rows.take(4).flatMap { it.items.take(8) }
-                        .mapNotNull { it.posterUrl }
-
-                    val allPreloadUrls = (heroUrls + visiblePosterUrls).distinct()
-                    for (url in allPreloadUrls) {
-                        try {
-                            val req = ImageRequest.Builder(app)
-                                .data(url)
-                                .build()
-                            imageLoader.enqueue(req)
-                        } catch (_: Exception) {}
-                    }
-                }
-
-                // Resolve hero logos in the background and refresh the hero
-                // carousel when they arrive. The guard keeps a stale refresh
-                // from overwriting a newer catalog load.
-                viewModelScope.launch(Dispatchers.IO) {
-                    val resolved = coroutineScope {
-                        heroItems.map { item ->
-                            async {
-                                if (!item.logoUrl.isNullOrBlank()) {
-                                    item
-                                } else {
-                                    try {
-                                        withTimeoutOrNull(2500L) {
-                                            repository.resolveHeroItem(item)
-                                        } ?: item
-                                    } catch (_: Throwable) {
-                                        item
-                                    }
-                                }
-                            }
-                        }.awaitAll()
-                    }
-                    if (!isActive) return@launch
-                    if (rawHeroItems == heroItems && resolved != heroItems) {
-                        rawHeroItems = resolved
-                        updateSuccessState()
-                    }
-                }
-
-                // Warm the details cache for the items the user is most likely
-                // to tap (heroes + first rows), so a poster tap opens the
-                // details page from cache instead of waiting on a fresh
-                // network fetch. Bounded (20 items), sequential with a small
-                // gap so it never saturates the connection, and cancelled on
-                // the next catalog load.
-                warmupJob?.cancel()
-                warmupJob = viewModelScope.launch(Dispatchers.IO) {
-                    val candidates = (heroItems + rows.take(4).flatMap { it.items.take(6) })
-                        .distinctBy { it.id }
-                        .take(20)
-                    for (item in candidates) {
-                        if (!isActive) return@launch
-                        val cleanId = item.id.removePrefix("tmdb:").removePrefix("tmdb/").trim()
-                            .substringBefore(':').trim()
-                        if (cleanId.isEmpty() || !cleanId.all { it.isDigit() }) continue
-                        val isTv = item.type == com.netvio.core.model.MediaType.TV_SERIES ||
-                            item.type == com.netvio.core.model.MediaType.ANIME
-                        try {
-                            com.netvio.core.util.TmdbBridge.fetchEnrichedDetails(
-                                client = com.netvio.core.network.DohDns.metadataClient,
-                                tmdbId = cleanId,
-                                isTv = isTv,
-                                providerName = "tmdb"
-                            )
-                        } catch (_: Throwable) {
-                        }
-                        delay(150L)
-                    }
-                }
+            processAndEmitRows(rows)
+            if (!coroutineContext.isActive) return
+            // Persist the fresh catalog so the next cold start paints instantly.
+            HomeCatalogDiskCache.save(getApplication(), rows)
 
             } catch (e: Throwable) {
                 if (e is kotlinx.coroutines.CancellationException) {
@@ -700,5 +523,206 @@ class HomeViewModel(
                     )
                 }
             }
+    }
+
+    /**
+     * Processes fetched rows (hero pick, row rotation, enrichment, tabs) and
+     * emits Success, then kicks off image preload, hero-logo resolution and
+     * the details warm-up. Called twice on a cold start: once with the disk
+     * cache for an instant first paint, once with fresh network rows.
+     */
+    private suspend fun processAndEmitRows(rows: List<CatalogRow>) {
+        // 2. Deterministic provider + session seed ensures carousel & feed change per provider and launch
+        val currentProvider = repository.activePlugin.value.name
+        val providerHash = currentProvider.hashCode().toLong()
+        val sessionIdx = AppSessionManager.getSessionIndex().toLong()
+        val combinedSeed = (providerHash * 37L) xor (sessionIdx * 10007L)
+        val providerRandom = kotlin.random.Random(combinedSeed)
+
+        // 3. Select hero candidates from the top visible TMDB rows so they never get diluted by Stremio rows.
+        // Hidden TMDB rows never reach this ViewModel (the repository
+        // filters them), so when no TMDB row is visible the hero falls
+        // back to all rows; when nothing is visible the hero is empty.
+        val pinnedCoreCount = 4.coerceAtMost(rows.size)
+
+        val tmdbRows = rows.filter { it.catalogKey?.startsWith("tmdb:") == true }
+        val heroSourceRows = tmdbRows.take(pinnedCoreCount).ifEmpty { rows }
+        val rawCandidates = heroSourceRows.flatMap { it.items }
+            .filter { !it.backdropUrl.isNullOrBlank() || !it.posterUrl.isNullOrBlank() }
+            .distinctBy { it.id }
+
+        val candidates = rawCandidates
+
+        val candidatesWithLogos = candidates.filter { !it.logoUrl.isNullOrBlank() }.shuffled(providerRandom)
+        val otherCandidates = candidates.filter { it.logoUrl.isNullOrBlank() }.shuffled(providerRandom)
+        val heroCandidatesToResolve = (candidatesWithLogos + otherCandidates).take(8)
+
+        // 4. Pick hero candidates now (items that already carry a logo
+        // go first). Missing logos resolve in the background AFTER the
+        // feed is shown (see below), so first paint never waits on
+        // them — on a slow connection the logo fetch alone cost up to
+        // 2.5s before anything appeared.
+        val heroCandidatesPool = heroCandidatesToResolve
+        val heroWithLogos = heroCandidatesPool.filter { !it.logoUrl.isNullOrBlank() }
+        val heroItems = if (heroWithLogos.size >= 4) {
+            heroWithLogos.take(6)
+        } else {
+            (heroWithLogos + heroCandidatesPool.filter { it.logoUrl.isNullOrBlank() }).take(6)
+        }
+
+        // 5. Keep core rows pinned at the top and keep every row in
+        // repository order, which already reflects the saved Catalog
+        // Manager order, visibility and titles; only rotate the item
+        // offset inside rows beyond the first 4 so repeat visits feel
+        // fresh. Rows are never shuffled here.
+        val processedRows = if (rows.size > pinnedCoreCount) {
+            val pinnedRows = rows.take(pinnedCoreCount)
+            val otherRows = rows.drop(pinnedCoreCount)
+            pinnedRows + otherRows.map { row ->
+                if (row.items.size > 4) {
+                    val offset = providerRandom.nextInt(row.items.size)
+                    row.copy(items = row.items.drop(offset) + row.items.take(offset))
+                } else {
+                    row
+                }
+            }
+        } else {
+            rows
+        }
+
+        val enrichedRows = processedRows.map { row ->
+            val t = row.title.lowercase()
+            when {
+                t.contains("trend") -> row.copy(
+                    subtitle = row.subtitle ?: "Based on recent views",
+                    eyebrow = row.eyebrow ?: "RIGHT NOW"
+                )
+                t.contains("popular") -> row.copy(
+                    subtitle = row.subtitle ?: "Most watched this week",
+                    eyebrow = row.eyebrow ?: "FEATURED"
+                )
+                else -> row
+            }
+        }
+
+        val distinctRowHeaders = deduplicateCatalogRows(enrichedRows)
+        rawCatalogRows = deduplicateProminentCatalogItems(distinctRowHeaders, maxRows = 3)
+        rawHeroItems = heroItems
+
+        // Compute bulletproof self-pruning tabs
+        val allItems = enrichedRows.flatMap { it.items }
+        val hasMovies = allItems.any { classifyItem(it, "") == HomeFilterTab.MOVIES }
+        val hasTv = allItems.any { classifyItem(it, "") == HomeFilterTab.TV_SHOWS }
+        val hasAnime = allItems.any { classifyItem(it, "") == HomeFilterTab.ANIME }
+        val hasTrending = enrichedRows.any {
+            val t = it.title.lowercase()
+            t.contains("trend") || t.contains("popular") || t.contains("featured") || t.contains("top")
+        }
+
+        val tabs = mutableListOf(HomeFilterTab.ALL)
+        if (hasMovies) tabs.add(HomeFilterTab.MOVIES)
+        if (hasTv) tabs.add(HomeFilterTab.TV_SHOWS)
+        if (hasAnime) tabs.add(HomeFilterTab.ANIME)
+        if (hasTrending) tabs.add(HomeFilterTab.TRENDING)
+        computedTabs = tabs
+
+        if (_selectedTab.value !in tabs) {
+            _selectedTab.value = HomeFilterTab.ALL
+        }
+
+        val rowsMap = computedTabs.associateWith { tab -> filterRowsForTab(tab, enrichedRows) }
+        val filtered = rowsMap[_selectedTab.value] ?: filterRowsForTab(_selectedTab.value, enrichedRows)
+
+        if (!coroutineContext.isActive) return
+        // 6. Emit Success IMMEDIATELY so the home feed appears instantaneously
+        _uiState.value = HomeUiState.Success(
+            heroItems = heroItems,
+            catalogRows = enrichedRows,
+            availableTabs = computedTabs,
+            filteredRows = filtered,
+            rowsByTab = rowsMap
+        )
+
+        // 5. Preload images asynchronously in background without blocking UI
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            val imageLoader = app.imageLoader
+
+            val heroUrls = heroItems.flatMap { item ->
+                listOfNotNull(item.backdropUrl, item.logoUrl)
+            }
+            val visiblePosterUrls = rows.take(4).flatMap { it.items.take(8) }
+                .mapNotNull { it.posterUrl }
+
+            val allPreloadUrls = (heroUrls + visiblePosterUrls).distinct()
+            for (url in allPreloadUrls) {
+                try {
+                    val req = ImageRequest.Builder(app)
+                        .data(url)
+                        .build()
+                    imageLoader.enqueue(req)
+                } catch (_: Exception) {}
+            }
+        }
+
+        // Resolve hero logos in the background and refresh the hero
+        // carousel when they arrive. The guard keeps a stale refresh
+        // from overwriting a newer catalog load.
+        viewModelScope.launch(Dispatchers.IO) {
+            val resolved = coroutineScope {
+                heroItems.map { item ->
+                    async {
+                        if (!item.logoUrl.isNullOrBlank()) {
+                            item
+                        } else {
+                            try {
+                                withTimeoutOrNull(2500L) {
+                                    repository.resolveHeroItem(item)
+                                } ?: item
+                            } catch (_: Throwable) {
+                                item
+                            }
+                        }
+                    }
+                }.awaitAll()
+            }
+            if (!isActive) return@launch
+            if (rawHeroItems == heroItems && resolved != heroItems) {
+                rawHeroItems = resolved
+                updateSuccessState()
+            }
+        }
+
+        // Warm the details cache for the items the user is most likely
+        // to tap (heroes + first rows), so a poster tap opens the
+        // details page from cache instead of waiting on a fresh
+        // network fetch. Bounded (20 items), sequential with a small
+        // gap so it never saturates the connection, and cancelled on
+        // the next catalog load.
+        warmupJob?.cancel()
+        warmupJob?.cancel()
+        warmupJob = viewModelScope.launch(Dispatchers.IO) {
+            val candidates = (heroItems + rows.take(4).flatMap { it.items.take(6) })
+                .distinctBy { it.id }
+                .take(20)
+            for (item in candidates) {
+                if (!isActive) return@launch
+                val cleanId = item.id.removePrefix("tmdb:").removePrefix("tmdb/").trim()
+                    .substringBefore(':').trim()
+                if (cleanId.isEmpty() || !cleanId.all { it.isDigit() }) continue
+                val isTv = item.type == com.netvio.core.model.MediaType.TV_SERIES ||
+                    item.type == com.netvio.core.model.MediaType.ANIME
+                try {
+                    com.netvio.core.util.TmdbBridge.fetchEnrichedDetails(
+                        client = com.netvio.core.network.DohDns.metadataClient,
+                        tmdbId = cleanId,
+                        isTv = isTv,
+                        providerName = "tmdb"
+                    )
+                } catch (_: Throwable) {
+                }
+                delay(150L)
+            }
+        }
     }
 }
