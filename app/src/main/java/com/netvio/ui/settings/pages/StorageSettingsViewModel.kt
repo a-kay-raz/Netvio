@@ -12,6 +12,9 @@ import com.netvio.core.p2p.P2pStreamingEngine
 import com.netvio.data.backup.BackupInspectionResult
 import com.netvio.data.backup.BackupSummary
 import com.netvio.data.backup.ConfigurationBackupManager
+import com.netvio.data.cache.AppCacheManager
+import com.netvio.data.cache.CacheBreakdown
+import com.netvio.data.cache.CacheCategory
 import com.netvio.data.preferences.PreferencesRepository
 import com.netvio.data.preferences.preferencesDataStore
 import com.netvio.download.DownloadEngine
@@ -52,6 +55,30 @@ class StorageSettingsViewModel(application: Application) : AndroidViewModel(appl
     private val _cacheSizeBytes = MutableStateFlow(0L)
     val cacheSizeBytes: StateFlow<Long> = _cacheSizeBytes.asStateFlow()
 
+    private val _cacheBreakdown = MutableStateFlow(CacheBreakdown())
+    val cacheBreakdown: StateFlow<CacheBreakdown> = _cacheBreakdown.asStateFlow()
+
+    private val _clearingCategory = MutableStateFlow<CacheCategory?>(null)
+    val clearingCategory: StateFlow<CacheCategory?> = _clearingCategory.asStateFlow()
+
+    private val _autoCleanupEnabled = MutableStateFlow(true)
+    val autoCleanupEnabled: StateFlow<Boolean> = _autoCleanupEnabled.asStateFlow()
+
+    private val _maxCacheLimitMb = MutableStateFlow(500)
+    val maxCacheLimitMb: StateFlow<Int> = _maxCacheLimitMb.asStateFlow()
+
+    private val _cacheRetentionDays = MutableStateFlow(7)
+    val cacheRetentionDays: StateFlow<Int> = _cacheRetentionDays.asStateFlow()
+
+    private val _autoClearP2pOnExit = MutableStateFlow(true)
+    val autoClearP2pOnExit: StateFlow<Boolean> = _autoClearP2pOnExit.asStateFlow()
+
+    private val _lastAutoCleanTimestamp = MutableStateFlow(0L)
+    val lastAutoCleanTimestamp: StateFlow<Long> = _lastAutoCleanTimestamp.asStateFlow()
+
+    private val _lastAutoCleanReclaimedBytes = MutableStateFlow(0L)
+    val lastAutoCleanReclaimedBytes: StateFlow<Long> = _lastAutoCleanReclaimedBytes.asStateFlow()
+
     private val _downloadsSizeBytes = MutableStateFlow(0L)
     val downloadsSizeBytes: StateFlow<Long> = _downloadsSizeBytes.asStateFlow()
 
@@ -77,6 +104,12 @@ class StorageSettingsViewModel(application: Application) : AndroidViewModel(appl
 
     init {
         viewModelScope.launch { prefs.wifiOnlyDownloads.collect { _wifiOnlyDownloads.value = it } }
+        viewModelScope.launch { prefs.autoCacheCleanupEnabled.collect { _autoCleanupEnabled.value = it } }
+        viewModelScope.launch { prefs.maxCacheLimitMb.collect { _maxCacheLimitMb.value = it } }
+        viewModelScope.launch { prefs.cacheRetentionDays.collect { _cacheRetentionDays.value = it } }
+        viewModelScope.launch { prefs.autoClearP2pOnExit.collect { _autoClearP2pOnExit.value = it } }
+        viewModelScope.launch { prefs.lastCacheCleanupTimestamp.collect { _lastAutoCleanTimestamp.value = it } }
+        viewModelScope.launch { prefs.lastCacheReclaimedBytes.collect { _lastAutoCleanReclaimedBytes.value = it } }
         viewModelScope.launch {
             prefs.customDownloadDir.collect { raw ->
                 if (!raw.isNullOrBlank()) {
@@ -105,37 +138,14 @@ class StorageSettingsViewModel(application: Application) : AndroidViewModel(appl
     fun calculateCacheSize() {
         viewModelScope.launch {
             _isCalculating.value = true
-            val size = withContext(Dispatchers.IO) {
-                calculateTotalCacheBytes()
+            val breakdown = withContext(Dispatchers.IO) {
+                AppCacheManager.inspectBreakdown(getApplication())
             }
-            _cacheSizeBytes.value = size
-            _cacheSizeFormatted.value = formatSize(size)
+            _cacheBreakdown.value = breakdown
+            _cacheSizeBytes.value = breakdown.totalBytes
+            _cacheSizeFormatted.value = formatSize(breakdown.totalBytes)
             _isCalculating.value = false
         }
-    }
-
-    private fun calculateTotalCacheBytes(): Long {
-        val context = getApplication<Application>()
-        val downloadDir = try {
-            DownloadEngine(context).getDownloadDirectory().canonicalPath
-        } catch (_: Exception) { "" }
-        val excludeSet = if (downloadDir.isNotBlank()) setOf(downloadDir) else emptySet()
-
-        val visited = mutableSetOf<String>()
-        var totalCache = 0L
-
-        // 1. Internal application cache: context.cacheDir
-        // (holds image_cache, stream_cache, http_cache, nuvio-engine cache)
-        totalCache += getDirSizeSafely(context.cacheDir, visited, excludeSet)
-
-        // 2. External application cache: context.externalCacheDirs
-        try {
-            context.externalCacheDirs?.filterNotNull()?.forEach { extDir ->
-                totalCache += getDirSizeSafely(extDir, visited, excludeSet)
-            }
-        } catch (_: Exception) {}
-
-        return totalCache
     }
 
     fun calculateStorageBreakdown() {
@@ -175,59 +185,79 @@ class StorageSettingsViewModel(application: Application) : AndroidViewModel(appl
 
     suspend fun clearCacheSuspend(): Boolean {
         _isClearing.value = true
-        val context = getApplication<Application>()
-        val success = withContext(Dispatchers.IO) {
-            // 1. Release ExoPlayer SimpleCache lock so chunk files can be deleted
-            try {
-                StreamingPlaybackCacheManager.release()
-            } catch (_: Throwable) {}
-
-            // 2. Evict OkHttp Disk Cache
-            try {
-                DohDns.sharedBaseClient.cache?.evictAll()
-            } catch (_: Throwable) {}
-
-            // 3. Clear Coil Image Cache (disk + memory)
-            try {
-                val imageLoader = SingletonImageLoader.get(context)
-                imageLoader.diskCache?.clear()
-                imageLoader.memoryCache?.clear()
-            } catch (_: Throwable) {}
-
-            // 4. Reclaim P2P Engine Cache
-            try {
-                P2pStreamingEngine.clearCache()
-            } catch (_: Throwable) {}
-
-            // 5. Safely delete files in cache directories, strictly preserving offline downloads
-            val downloadDir = try {
-                DownloadEngine(context).getDownloadDirectory().canonicalPath
-            } catch (_: Exception) { "" }
-            val excludeSet = if (downloadDir.isNotBlank()) setOf(downloadDir) else emptySet()
-
-            val visited = mutableSetOf<String>()
-            val d1 = deleteDirSafely(context.cacheDir, visited, excludeSet, isRoot = true)
-            var d2 = true
-            try {
-                context.externalCacheDirs?.filterNotNull()?.forEach { extDir ->
-                    d2 = deleteDirSafely(extDir, visited, excludeSet, isRoot = true) && d2
-                }
-            } catch (_: Exception) {}
-
-            // Re-create root cache directories
-            try { context.cacheDir?.mkdirs() } catch (_: Exception) {}
-            try { context.externalCacheDir?.mkdirs() } catch (_: Exception) {}
-
-            d1 && d2
+        val app = getApplication<Application>()
+        withContext(Dispatchers.IO) {
+            AppCacheManager.clearAllCache(app)
         }
-
-        // Synchronously re-evaluate remaining cache size before clearing flag drops
-        val remainingBytes = withContext(Dispatchers.IO) { calculateTotalCacheBytes() }
-        _cacheSizeBytes.value = remainingBytes
-        _cacheSizeFormatted.value = formatSize(remainingBytes)
+        val breakdown = withContext(Dispatchers.IO) {
+            AppCacheManager.inspectBreakdown(app)
+        }
+        _cacheBreakdown.value = breakdown
+        _cacheSizeBytes.value = breakdown.totalBytes
+        _cacheSizeFormatted.value = formatSize(breakdown.totalBytes)
         _isClearing.value = false
         calculateStorageBreakdown()
-        return success
+        return true
+    }
+
+    fun clearCacheCategory(category: CacheCategory, onComplete: (Long) -> Unit = {}) {
+        viewModelScope.launch {
+            _clearingCategory.value = category
+            val app = getApplication<Application>()
+            val reclaimed = withContext(Dispatchers.IO) {
+                AppCacheManager.clearCategory(app, category)
+            }
+            val breakdown = withContext(Dispatchers.IO) {
+                AppCacheManager.inspectBreakdown(app)
+            }
+            _cacheBreakdown.value = breakdown
+            _cacheSizeBytes.value = breakdown.totalBytes
+            _cacheSizeFormatted.value = formatSize(breakdown.totalBytes)
+            _clearingCategory.value = null
+            calculateStorageBreakdown()
+            onComplete(reclaimed)
+        }
+    }
+
+    fun setAutoCleanupEnabled(enabled: Boolean) {
+        _autoCleanupEnabled.value = enabled
+        viewModelScope.launch {
+            prefs.setAutoCacheCleanupEnabled(enabled)
+            if (enabled) {
+                AppCacheManager.runAutomaticMaintenance(getApplication(), force = false)
+                refreshAllStorageTelemetry()
+            }
+        }
+    }
+
+    fun setMaxCacheLimitMb(limitMb: Int) {
+        val clamped = limitMb.coerceIn(250, 2048)
+        _maxCacheLimitMb.value = clamped
+        viewModelScope.launch {
+            prefs.setMaxCacheLimitMb(clamped)
+            AppCacheManager.applySubsystemCaps(
+                context = getApplication(),
+                maxCacheLimitMb = clamped,
+                p2pEnabled = prefs.p2pStreamsEnabled.first()
+            )
+            AppCacheManager.runAutomaticMaintenance(getApplication(), force = true)
+            refreshAllStorageTelemetry()
+        }
+    }
+
+    fun setCacheRetentionDays(days: Int) {
+        val clamped = days.coerceIn(1, 90)
+        _cacheRetentionDays.value = clamped
+        viewModelScope.launch {
+            prefs.setCacheRetentionDays(clamped)
+            AppCacheManager.runAutomaticMaintenance(getApplication(), force = true)
+            refreshAllStorageTelemetry()
+        }
+    }
+
+    fun setAutoClearP2pOnExit(enabled: Boolean) {
+        _autoClearP2pOnExit.value = enabled
+        viewModelScope.launch { prefs.setAutoClearP2pOnExit(enabled) }
     }
 
     fun clearCache(onComplete: () -> Unit = {}) {

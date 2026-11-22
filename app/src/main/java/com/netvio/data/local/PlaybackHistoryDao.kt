@@ -57,6 +57,17 @@ interface PlaybackHistoryDao {
     @Query("SELECT * FROM playback_history WHERE isDeleted = 0 ORDER BY lastWatchedTimestamp DESC")
     suspend fun getAllHistory(): List<PlaybackHistoryEntity>
 
+    @Query("SELECT * FROM playback_history WHERE profileId = :profileId ORDER BY lastWatchedTimestamp DESC")
+    suspend fun getAllHistoryIncludingDeleted(profileId: String = "default_user"): List<PlaybackHistoryEntity>
+
+    @Query("""
+        UPDATE playback_history
+        SET posterUrl = CASE WHEN posterUrl IS NULL OR posterUrl = '' THEN :posterUrl ELSE posterUrl END,
+            backdropUrl = CASE WHEN backdropUrl IS NULL OR backdropUrl = '' THEN :backdropUrl ELSE backdropUrl END
+        WHERE id = :id AND isDeleted = 0
+    """)
+    suspend fun backfillArtwork(id: String, posterUrl: String?, backdropUrl: String?)
+
     @Query("SELECT * FROM playback_history WHERE id = :id AND isDeleted = 0 LIMIT 1")
     suspend fun getProgress(id: String): PlaybackHistoryEntity?
 
@@ -109,6 +120,9 @@ interface PlaybackHistoryDao {
     @Query("UPDATE playback_history SET isDirty = 0 WHERE id IN (:ids) AND clientUpdatedAtMs <= :upToTimestamp")
     suspend fun markClean(ids: List<String>, upToTimestamp: Long)
 
+    @Query("UPDATE playback_history SET isDirty = 0 WHERE id = :id AND clientUpdatedAtMs = :expectedTimestamp")
+    suspend fun markCleanExact(id: String, expectedTimestamp: Long)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(item: PlaybackHistoryEntity)
 
@@ -116,13 +130,13 @@ interface PlaybackHistoryDao {
     suspend fun upsertBatch(items: List<PlaybackHistoryEntity>)
 
     @Query("""
-        UPDATE playback_history 
-        SET currentPositionMs = :positionMs, 
-            durationMs = :durationMs, 
-            isCompleted = :isCompleted, 
-            lastWatchedTimestamp = :lastWatchedTs, 
-            clientUpdatedAtMs = :clientUpdatedTs, 
-            isDirty = 1 
+        UPDATE playback_history
+        SET currentPositionMs = :positionMs,
+            durationMs = :durationMs,
+            isCompleted = :isCompleted,
+            lastWatchedTimestamp = MAX(:lastWatchedTs, lastWatchedTimestamp),
+            clientUpdatedAtMs = MAX(:clientUpdatedTs, MAX(clientUpdatedAtMs, lastWatchedTimestamp) + 1),
+            isDirty = 1
         WHERE id = :id
     """)
     suspend fun updateProgress(
@@ -134,25 +148,25 @@ interface PlaybackHistoryDao {
         clientUpdatedTs: Long
     )
 
-    @Query("UPDATE playback_history SET isDismissedFromContinueWatching = 1, isDirty = 1, clientUpdatedAtMs = :now WHERE id = :id")
+    @Query("UPDATE playback_history SET isDismissedFromContinueWatching = 1, isDirty = 1, clientUpdatedAtMs = MAX(:now, MAX(clientUpdatedAtMs, lastWatchedTimestamp) + 1) WHERE id = :id")
     suspend fun dismissFromContinueWatching(id: String, now: Long = System.currentTimeMillis())
 
-    @Query("UPDATE playback_history SET isDismissedFromContinueWatching = 1, isDirty = 1, clientUpdatedAtMs = :now WHERE id IN (:ids)")
+    @Query("UPDATE playback_history SET isDismissedFromContinueWatching = 1, isDirty = 1, clientUpdatedAtMs = MAX(:now, MAX(clientUpdatedAtMs, lastWatchedTimestamp) + 1) WHERE id IN (:ids)")
     suspend fun dismissBatchFromContinueWatching(ids: List<String>, now: Long = System.currentTimeMillis())
 
-    @Query("UPDATE playback_history SET isDismissedFromContinueWatching = 1, isDirty = 1, clientUpdatedAtMs = :now WHERE profileId = :profileId AND (:provider IS NULL OR LOWER(provider) = LOWER(:provider))")
+    @Query("UPDATE playback_history SET isDismissedFromContinueWatching = 1, isDirty = 1, clientUpdatedAtMs = MAX(:now, MAX(clientUpdatedAtMs, lastWatchedTimestamp) + 1) WHERE profileId = :profileId AND (:provider IS NULL OR LOWER(provider) = LOWER(:provider))")
     suspend fun clearContinueWatching(provider: String? = null, profileId: String = "default_user", now: Long = System.currentTimeMillis())
 
-    @Query("UPDATE playback_history SET isDeleted = 1, isDirty = 1, clientUpdatedAtMs = :now WHERE id = :id")
+    @Query("UPDATE playback_history SET isDeleted = 1, isDirty = 1, clientUpdatedAtMs = MAX(:now, MAX(clientUpdatedAtMs, lastWatchedTimestamp) + 1) WHERE id = :id")
     suspend fun softDelete(id: String, now: Long = System.currentTimeMillis())
 
-    @Query("UPDATE playback_history SET isDeleted = 1, isDirty = 1, clientUpdatedAtMs = :now WHERE id IN (:ids)")
+    @Query("UPDATE playback_history SET isDeleted = 1, isDirty = 1, clientUpdatedAtMs = MAX(:now, MAX(clientUpdatedAtMs, lastWatchedTimestamp) + 1) WHERE id IN (:ids)")
     suspend fun softDeleteBatch(ids: List<String>, now: Long = System.currentTimeMillis())
 
-    @Query("UPDATE playback_history SET isDeleted = 1, isDirty = 1, clientUpdatedAtMs = :now WHERE profileId = :profileId AND mediaId IN (:mediaIds)")
+    @Query("UPDATE playback_history SET isDeleted = 1, isDirty = 1, clientUpdatedAtMs = MAX(:now, MAX(clientUpdatedAtMs, lastWatchedTimestamp) + 1) WHERE profileId = :profileId AND mediaId IN (:mediaIds)")
     suspend fun softDeleteBatchByMediaId(mediaIds: List<String>, profileId: String = "default_user", now: Long = System.currentTimeMillis())
 
-    @Query("UPDATE playback_history SET isDeleted = 1, isDirty = 1, clientUpdatedAtMs = :now WHERE profileId = :profileId")
+    @Query("UPDATE playback_history SET isDeleted = 1, isDirty = 1, clientUpdatedAtMs = MAX(:now, MAX(clientUpdatedAtMs, lastWatchedTimestamp) + 1) WHERE profileId = :profileId")
     suspend fun softClearHistory(profileId: String = "default_user", now: Long = System.currentTimeMillis())
 
     @Query("DELETE FROM playback_history WHERE id = :id")

@@ -6,10 +6,11 @@ import com.netvio.core.model.MediaDetail
 import com.netvio.core.model.MediaItem
 import com.netvio.core.network.DohDns
 import com.netvio.core.sync.simkl.SimklClient
-import com.netvio.core.sync.simkl.SimklEpisodeItem
+import com.netvio.core.sync.simkl.SimklHistoryEpisode
+import com.netvio.core.sync.simkl.SimklHistoryPayload
+import com.netvio.core.sync.simkl.SimklHistorySeason
+import com.netvio.core.sync.simkl.SimklHistoryShow
 import com.netvio.core.sync.simkl.SimklIds
-import com.netvio.core.sync.simkl.SimklScrobbleItem
-import com.netvio.core.sync.simkl.SimklScrobblePayload
 import com.netvio.core.sync.simkl.SimklSyncItem
 import com.netvio.core.sync.simkl.SimklSyncPayload
 import com.netvio.core.sync.trakt.*
@@ -19,15 +20,18 @@ import com.netvio.data.local.PlaybackHistoryEntity
 import com.netvio.data.local.WatchlistEntity
 import com.netvio.data.preferences.PreferencesRepository
 import com.netvio.data.profile.ProfileManager
-import com.netvio.data.repository.LibraryRepository
+import com.netvio.data.repository.Playlist
 import com.netvio.data.repository.PlaylistItem
 import com.netvio.data.repository.PlaylistRepository
+import com.netvio.data.sync.supabase.SupabaseSyncManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -37,25 +41,39 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Unified MediaSyncManager orchestrating full two-way synchronization across Trakt.tv and Simkl.
  *
- * Capabilities:
- * - Two-way Watchlist & Favorites sync (fetch remote with TMDB poster/backdrop hydration & push local)
- * - Two-way Playback Resume points sync (pushes local Continue Watching to Trakt/Simkl & pulls remote with TMDB hydration)
- * - Two-way Full Watch History sync (pushes local completed items & pulls remote history into both playback_history and watchlist)
- * - Two-way Custom Lists & Playlists sync (creates & populates Trakt custom lists from local playlists and imports remote lists)
- * - Automatic OAuth token refresh on HTTP 401
+ * Coordinated with [SupabaseSyncManager] via [SyncCoordinator.dataMutex] and respects
+ * [TrackerReconciliationPolicy] so deletions, dismissals, profile isolation, and single-flight
+ * OAuth token refreshes behave safely under concurrent user activity.
  */
 class MediaSyncManager private constructor(
     private val context: Context
 ) {
+    enum class TrackerSyncTarget {
+        ALL,
+        TRAKT,
+        SIMKL;
+
+        fun includesTrakt(): Boolean = this == ALL || this == TRAKT
+        fun includesSimkl(): Boolean = this == ALL || this == SIMKL
+    }
+
+    private data class SubSyncOutcome(
+        val error: String? = null,
+        val didMutateLocal: Boolean = false,
+        val activeToken: String = ""
+    )
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val db = AppDatabase.getInstance(context)
     private val watchlistDao = db.watchlistDao()
     private val playbackHistoryDao = db.playbackHistoryDao()
-    private val libraryRepository = LibraryRepository.getInstance(context)
     private val playlistRepository = PlaylistRepository.getInstance(context)
     private val preferencesRepository = PreferencesRepository.getInstance(context)
     private val profileManager = ProfileManager.getInstance(context)
@@ -73,17 +91,42 @@ class MediaSyncManager private constructor(
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
+    private val syncMutex = Mutex()
+    private val pendingTarget = AtomicReference<TrackerSyncTarget?>(null)
+    private val traktRefreshMutex = Mutex()
+    private val traktAuthGeneration = AtomicLong(0L)
+    private val simklAuthGeneration = AtomicLong(0L)
+    private val posterRepairRunning = AtomicBoolean(false)
+
     private val hydrationSemaphore = Semaphore(4)
     private val hydratedCache = ConcurrentHashMap<String, HydratedMediaMeta>()
 
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
+    private val _isTraktSyncing = MutableStateFlow(false)
+    val isTraktSyncing: StateFlow<Boolean> = _isTraktSyncing.asStateFlow()
+
+    private val _isSimklSyncing = MutableStateFlow(false)
+    val isSimklSyncing: StateFlow<Boolean> = _isSimklSyncing.asStateFlow()
+
     private val _syncStatusMessage = MutableStateFlow<String?>(null)
     val syncStatusMessage: StateFlow<String?> = _syncStatusMessage.asStateFlow()
 
+    private val _traktStatusMessage = MutableStateFlow<String?>(null)
+    val traktStatusMessage: StateFlow<String?> = _traktStatusMessage.asStateFlow()
+
+    private val _simklStatusMessage = MutableStateFlow<String?>(null)
+    val simklStatusMessage: StateFlow<String?> = _simklStatusMessage.asStateFlow()
+
     private val _syncError = MutableStateFlow<String?>(null)
     val syncError: StateFlow<String?> = _syncError.asStateFlow()
+
+    private val _traktSyncError = MutableStateFlow<String?>(null)
+    val traktSyncError: StateFlow<String?> = _traktSyncError.asStateFlow()
+
+    private val _simklSyncError = MutableStateFlow<String?>(null)
+    val simklSyncError: StateFlow<String?> = _simklSyncError.asStateFlow()
 
     private data class HydratedMediaMeta(
         val mediaId: String,
@@ -100,11 +143,40 @@ class MediaSyncManager private constructor(
     private fun currentProfileId(): String =
         profileManager.activeProfile.value?.id ?: "default_user"
 
-    /**
-     * Fast, single-request lightweight TMDB metadata lookup specifically for sync & poster repair.
-     * Avoids the 5-8 sub-requests (OMDb, Fanart, AniZip, AniList, Jikan, credits, videos, recommendations)
-     * that [TmdbBridge.fetchEnrichedDetails] fires, preventing rate-limiting and connection pool starvation.
-     */
+    private fun isTrackerSyncAllowed(): Boolean =
+        TrackerReconciliationPolicy.shouldSyncTrackersForProfile(profileManager.activeProfile.value?.type)
+
+    private fun mergeTargets(existing: TrackerSyncTarget?, incoming: TrackerSyncTarget): TrackerSyncTarget {
+        if (existing == null || existing == incoming) return incoming
+        return TrackerSyncTarget.ALL
+    }
+
+    private fun enqueuePendingTarget(target: TrackerSyncTarget) {
+        pendingTarget.updateAndGet { existing -> mergeTargets(existing, target) }
+    }
+
+    private fun isTraktSessionStillValid(expectedGen: Long): Boolean =
+        traktAuthGeneration.get() == expectedGen
+
+    private fun isSimklSessionStillValid(expectedGen: Long): Boolean =
+        simklAuthGeneration.get() == expectedGen
+
+    fun notifyTraktDisconnected() {
+        traktAuthGeneration.incrementAndGet()
+        _isTraktSyncing.value = false
+        _traktSyncError.value = null
+        _traktStatusMessage.value = null
+        _isSyncing.value = _isSimklSyncing.value
+    }
+
+    fun notifySimklDisconnected() {
+        simklAuthGeneration.incrementAndGet()
+        _isSimklSyncing.value = false
+        _simklSyncError.value = null
+        _simklStatusMessage.value = null
+        _isSyncing.value = _isTraktSyncing.value
+    }
+
     private suspend fun fetchLightweightTmdbMeta(
         rawId: String,
         fallbackTitle: String,
@@ -121,8 +193,7 @@ class MediaSyncManager private constructor(
             for (endpoint in listOf(primaryEndpoint, altEndpoint)) {
                 try {
                     val apiKey = TmdbBridge.DEFAULT_API_KEY
-                    val sep = "?"
-                    val url = "${TmdbBridge.BASE_URL}/$endpoint/$cleanId${sep}append_to_response=external_ids&api_key=$apiKey"
+                    val url = "${TmdbBridge.BASE_URL}/$endpoint/$cleanId?append_to_response=external_ids&api_key=$apiKey"
                     val req = Request.Builder()
                         .url(url)
                         .header("User-Agent", TmdbBridge.DEFAULT_USER_AGENT)
@@ -185,9 +256,6 @@ class MediaSyncManager private constructor(
         null
     }
 
-    /**
-     * Resolves canonical TMDB/IMDb IDs and enriches poster/backdrop/runtime via lightweight TMDB lookup.
-     */
     private suspend fun hydrateMediaMeta(
         rawMediaId: String?,
         tmdbId: Long?,
@@ -315,152 +383,204 @@ class MediaSyncManager private constructor(
     }
 
     /**
-     * Background repair job that finds any local Watchlist, Continue Watching, History, or Playlist items
-     * missing posterUrl/backdropUrl (e.g. from older Trakt/Simkl syncs) and backfills their artwork via TMDB.
+     * Background repair job backfilling missing artwork via column-only SQL updates
+     * so soft-delete flags and dirty timestamps remain untouched.
      */
     fun repairMissingLocalPostersAsync() {
         scope.launch {
             try {
-                repairMissingLocalPosters()
+                SyncCoordinator.dataMutex.withLock {
+                    repairMissingLocalPosters(currentProfileId())
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "Error repairing missing local posters", e)
             }
         }
     }
 
-    suspend fun repairMissingLocalPosters() = withContext(Dispatchers.IO) {
-        val profileId = currentProfileId()
-
-        // 1. Repair Watchlist items missing posters
-        val watchlists = watchlistDao.getAllWatchlist().filter {
-            it.profileId == profileId && (it.posterUrl.isNullOrBlank() || it.backdropUrl.isNullOrBlank())
-        }
-        for (w in watchlists) {
-            val isTv = !w.mediaType.equals("MOVIE", ignoreCase = true)
-            val hydrated = hydrateMediaMeta(
-                rawMediaId = w.mediaId,
-                tmdbId = w.mediaId.toLongOrNull(),
-                imdbId = w.mediaId.takeIf { it.startsWith("tt") },
-                title = w.title,
-                year = w.year,
-                isTv = isTv,
-                fetchRemoteIfUncached = true
-            )
-            if (!hydrated.posterUrl.isNullOrBlank()) {
-                watchlistDao.insert(
-                    w.copy(
-                        posterUrl = w.posterUrl?.takeIf { it.isNotBlank() } ?: hydrated.posterUrl,
-                        backdropUrl = w.backdropUrl?.takeIf { it.isNotBlank() } ?: hydrated.backdropUrl ?: hydrated.posterUrl,
-                        rating = w.rating ?: hydrated.rating,
-                        year = w.year ?: hydrated.year
-                    )
-                )
+    suspend fun repairMissingLocalPosters(profileId: String = currentProfileId()) = withContext(Dispatchers.IO) {
+        if (!posterRepairRunning.compareAndSet(false, true)) return@withContext
+        try {
+            val watchlists = watchlistDao.getAllWatchlist().filter {
+                it.profileId == profileId && (it.posterUrl.isNullOrBlank() || it.backdropUrl.isNullOrBlank())
             }
-        }
-
-        // 2. Repair PlaybackHistory (Continue Watching & History) items missing posters
-        val histories = playbackHistoryDao.getAllHistory().filter {
-            it.profileId == profileId && (it.posterUrl.isNullOrBlank() || it.backdropUrl.isNullOrBlank())
-        }
-        for (h in histories) {
-            val isTv = h.seasonNumber != null || h.episodeNumber != null ||
-                h.mediaType?.contains("TV", ignoreCase = true) == true ||
-                h.mediaType?.contains("ANIME", ignoreCase = true) == true
-            val hydrated = hydrateMediaMeta(
-                rawMediaId = h.mediaId,
-                tmdbId = h.mediaId.toLongOrNull(),
-                imdbId = h.mediaId.takeIf { it.startsWith("tt") },
-                title = h.title,
-                year = null,
-                isTv = isTv,
-                fetchRemoteIfUncached = true
-            )
-            if (!hydrated.posterUrl.isNullOrBlank()) {
-                playbackHistoryDao.upsert(
-                    h.copy(
-                        posterUrl = h.posterUrl?.takeIf { it.isNotBlank() } ?: hydrated.posterUrl,
-                        backdropUrl = h.backdropUrl?.takeIf { it.isNotBlank() } ?: hydrated.backdropUrl ?: hydrated.posterUrl
-                    )
+            for (w in watchlists) {
+                val isTv = !w.mediaType.equals("MOVIE", ignoreCase = true)
+                val hydrated = hydrateMediaMeta(
+                    rawMediaId = w.mediaId,
+                    tmdbId = w.mediaId.toLongOrNull(),
+                    imdbId = w.mediaId.takeIf { it.startsWith("tt") },
+                    title = w.title,
+                    year = w.year,
+                    isTv = isTv,
+                    fetchRemoteIfUncached = true
                 )
-            }
-        }
-
-        // 3. Repair Custom Playlists missing posters
-        val playlists = playlistRepository.awaitLoaded()
-        for (pl in playlists) {
-            if (pl.isSystem) continue
-            for (item in pl.items) {
-                if (item.posterUrl.isNullOrBlank() || item.backdropUrl.isNullOrBlank()) {
-                    val hydrated = hydrateMediaMeta(
-                        rawMediaId = item.mediaId,
-                        tmdbId = item.mediaId.toLongOrNull(),
-                        imdbId = item.mediaId.takeIf { it.startsWith("tt") },
-                        title = item.title,
-                        year = item.year,
-                        isTv = item.isTvSeries,
-                        fetchRemoteIfUncached = true
+                if (!hydrated.posterUrl.isNullOrBlank()) {
+                    watchlistDao.backfillArtwork(
+                        mediaId = w.mediaId,
+                        profileId = profileId,
+                        posterUrl = hydrated.posterUrl,
+                        backdropUrl = hydrated.backdropUrl ?: hydrated.posterUrl,
+                        rating = hydrated.rating,
+                        year = hydrated.year
                     )
-                    if (!hydrated.posterUrl.isNullOrBlank()) {
-                        playlistRepository.backfillItemArtwork(
-                            mediaId = item.mediaId,
+                }
+            }
+
+            val histories = playbackHistoryDao.getAllHistory().filter {
+                it.profileId == profileId && (it.posterUrl.isNullOrBlank() || it.backdropUrl.isNullOrBlank())
+            }
+            for (h in histories) {
+                val isTv = h.seasonNumber != null || h.episodeNumber != null ||
+                    TrackerReconciliationPolicy.isTvMediaType(h.mediaType)
+                val hydrated = hydrateMediaMeta(
+                    rawMediaId = h.mediaId,
+                    tmdbId = h.mediaId.toLongOrNull(),
+                    imdbId = h.mediaId.takeIf { it.startsWith("tt") },
+                    title = h.title,
+                    year = null,
+                    isTv = isTv,
+                    fetchRemoteIfUncached = true
+                )
+                if (!hydrated.posterUrl.isNullOrBlank()) {
+                    playbackHistoryDao.backfillArtwork(
+                        id = h.id,
+                        posterUrl = hydrated.posterUrl,
+                        backdropUrl = hydrated.backdropUrl ?: hydrated.posterUrl
+                    )
+                }
+            }
+
+            val playlists = playlistRepository.awaitLoaded()
+            for (pl in playlists) {
+                if (pl.isSystem || pl.isDeleted) continue
+                for (item in pl.items) {
+                    if (item.posterUrl.isNullOrBlank() || item.backdropUrl.isNullOrBlank()) {
+                        val hydrated = hydrateMediaMeta(
+                            rawMediaId = item.mediaId,
+                            tmdbId = item.mediaId.toLongOrNull(),
+                            imdbId = item.mediaId.takeIf { it.startsWith("tt") },
                             title = item.title,
-                            posterUrl = hydrated.posterUrl,
-                            backdropUrl = hydrated.backdropUrl,
-                            year = hydrated.year
+                            year = item.year,
+                            isTv = item.isTvSeries,
+                            fetchRemoteIfUncached = true
                         )
+                        if (!hydrated.posterUrl.isNullOrBlank()) {
+                            playlistRepository.backfillItemArtwork(
+                                mediaId = item.mediaId,
+                                title = item.title,
+                                posterUrl = hydrated.posterUrl,
+                                backdropUrl = hydrated.backdropUrl,
+                                year = hydrated.year
+                            )
+                        }
                     }
                 }
             }
+        } finally {
+            posterRepairRunning.set(false)
         }
     }
 
     /**
-     * Ensures the Trakt token is valid, automatically refreshing via refresh_token if HTTP 401 occurs.
+     * Single-flight Trakt token refresh guarded against concurrent 401 storms and disconnect races.
      */
-    private suspend fun ensureValidTraktToken(currentToken: String): String {
-        if (currentToken.isBlank()) return ""
-        val profileRes = traktClient.getUserProfile(currentToken)
-        if (profileRes.isSuccess) return currentToken
+    suspend fun refreshTraktTokenOnUnauthorized(failedAccessToken: String): String? {
+        return traktRefreshMutex.withLock {
+            val gen = traktAuthGeneration.get()
+            val storedAccess = preferencesRepository.traktAccessToken.first()
+            if (storedAccess.isBlank()) return@withLock null
+            if (storedAccess != failedAccessToken) return@withLock storedAccess
 
-        val errMsg = profileRes.exceptionOrNull()?.message.orEmpty()
-        if (errMsg.contains("401")) {
             val refreshToken = preferencesRepository.traktRefreshToken.first()
-            if (refreshToken.isNotBlank()) {
-                val refreshed = traktClient.refreshToken(refreshToken).getOrNull()
-                if (refreshed != null && refreshed.accessToken.isNotBlank()) {
-                    val username = preferencesRepository.traktUsername.first().ifBlank { "Trakt User" }
-                    val newRefresh = refreshed.refreshToken.ifBlank { refreshToken }
-                    preferencesRepository.setTraktAuth(refreshed.accessToken, newRefresh, username)
-                    Log.i(TAG, "Successfully refreshed Trakt OAuth access token")
-                    return refreshed.accessToken
-                }
+            if (refreshToken.isBlank()) return@withLock null
+
+            val refreshed = traktClient.refreshToken(refreshToken).getOrNull() ?: return@withLock null
+            if (refreshed.accessToken.isBlank()) return@withLock null
+            if (traktAuthGeneration.get() != gen || preferencesRepository.traktAccessToken.first().isBlank()) {
+                return@withLock null
+            }
+
+            val username = preferencesRepository.traktUsername.first().ifBlank { "Trakt User" }
+            val newRefresh = refreshed.refreshToken.ifBlank { refreshToken }
+            preferencesRepository.setTraktAuth(refreshed.accessToken, newRefresh, username)
+            Log.i(TAG, "Successfully refreshed Trakt OAuth access token")
+            refreshed.accessToken
+        }
+    }
+
+    private suspend fun <T> withTraktTokenRetry(
+        initialToken: String,
+        block: suspend (String) -> Result<T>
+    ): Pair<String, Result<T>> {
+        var activeToken = initialToken
+        var res = block(activeToken)
+        if (res.isFailure && res.exceptionOrNull()?.message?.contains("401") == true) {
+            val refreshed = refreshTraktTokenOnUnauthorized(activeToken)
+            if (!refreshed.isNullOrBlank()) {
+                activeToken = refreshed
+                res = block(activeToken)
             }
         }
-        return currentToken
+        return activeToken to res
     }
 
-    /**
-     * Executes a full two-way synchronization of all enabled Trakt & Simkl features.
-     */
-    suspend fun syncAll(force: Boolean = false): Result<Unit> = withContext(Dispatchers.IO) {
-        if (_isSyncing.value && !force) {
+    suspend fun syncAll(force: Boolean = false): Result<Unit> =
+        syncTarget(TrackerSyncTarget.ALL, force)
+
+    suspend fun syncTraktNow(): Result<Unit> =
+        syncTarget(TrackerSyncTarget.TRAKT, force = true)
+
+    suspend fun syncSimklNow(): Result<Unit> =
+        syncTarget(TrackerSyncTarget.SIMKL, force = true)
+
+    private suspend fun syncTarget(
+        target: TrackerSyncTarget,
+        force: Boolean
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!isTrackerSyncAllowed()) {
             return@withContext Result.success(Unit)
         }
 
-        _isSyncing.value = true
-        _syncError.value = null
-        _syncStatusMessage.value = "Starting media synchronization..."
-        Log.i(TAG, "Starting full media sync...")
-
-        try {
-            val rawTraktToken = preferencesRepository.traktAccessToken.first()
-            val traktToken = if (rawTraktToken.isNotBlank()) ensureValidTraktToken(rawTraktToken) else ""
-            val simklToken = preferencesRepository.simklAccessToken.first()
-
-            if (traktToken.isBlank() && simklToken.isBlank()) {
-                repairMissingLocalPosters()
-                _syncStatusMessage.value = "No cloud tracking accounts connected"
+        if (SyncCoordinator.isGoogleInitialRestoreActive.get()) {
+            if (!force) {
                 return@withContext Result.success(Unit)
+            }
+            withTimeoutOrNull(15_000L) {
+                while (SyncCoordinator.isGoogleInitialRestoreActive.get()) {
+                    delay(200L)
+                }
+            }
+        }
+
+        if (syncMutex.isLocked) {
+            enqueuePendingTarget(target)
+            return@withContext Result.success(Unit)
+        }
+
+        val result = syncMutex.withLock {
+            if (!isTrackerSyncAllowed()) {
+                return@withLock Result.success(Unit)
+            }
+
+            var activeTraktToken = preferencesRepository.traktAccessToken.first()
+            val simklToken = preferencesRepository.simklAccessToken.first()
+            val traktGen = traktAuthGeneration.get()
+            val simklGen = simklAuthGeneration.get()
+
+            val runTrakt = target.includesTrakt() && activeTraktToken.isNotBlank()
+            val runSimkl = target.includesSimkl() && simklToken.isNotBlank()
+
+            val syncProfileId = currentProfileId()
+
+            if (!runTrakt && !runSimkl) {
+                if (target == TrackerSyncTarget.ALL && activeTraktToken.isBlank() && simklToken.isBlank()) {
+                    SyncCoordinator.dataMutex.withLock {
+                        repairMissingLocalPosters(syncProfileId)
+                    }
+                    _syncStatusMessage.value = "No cloud tracking accounts connected"
+                }
+                return@withLock Result.success(Unit)
             }
 
             val traktWatchlistEnabled = preferencesRepository.traktSyncWatchlist.first()
@@ -471,101 +591,209 @@ class MediaSyncManager private constructor(
             val simklWatchlistEnabled = preferencesRepository.simklSyncWatchlist.first()
             val simklHistoryEnabled = preferencesRepository.simklSyncHistory.first()
 
-            val errors = mutableListOf<String>()
-
-            // 1. Trakt Watchlist Two-Way Sync
-            if (traktToken.isNotBlank() && traktWatchlistEnabled) {
-                _syncStatusMessage.value = "Syncing Trakt Watchlist..."
-                syncTraktWatchlistInternal(traktToken)?.let { errors.add(it) }
+            _isSyncing.value = true
+            _syncError.value = null
+            if (runTrakt) {
+                _isTraktSyncing.value = true
+                _traktSyncError.value = null
+                _traktStatusMessage.value = "Syncing with Trakt…"
+            }
+            if (runSimkl) {
+                _isSimklSyncing.value = true
+                _simklSyncError.value = null
+                _simklStatusMessage.value = "Syncing with Simkl…"
+            }
+            _syncStatusMessage.value = when (target) {
+                TrackerSyncTarget.TRAKT -> "Syncing with Trakt…"
+                TrackerSyncTarget.SIMKL -> "Syncing with Simkl…"
+                TrackerSyncTarget.ALL -> "Starting media synchronization…"
             }
 
-            // 2. Simkl Watchlist Two-Way Sync
-            if (simklToken.isNotBlank() && simklWatchlistEnabled) {
-                _syncStatusMessage.value = "Syncing Simkl Watchlist..."
-                syncSimklWatchlistInternal(simklToken)?.let { errors.add(it) }
-            }
+            val traktErrors = mutableListOf<String>()
+            val simklErrors = mutableListOf<String>()
+            var didMutateLocal = false
 
-            // 3. Trakt Playback Progress (Two-Way Continue Watching)
-            if (traktToken.isNotBlank() && traktPlaybackEnabled) {
-                _syncStatusMessage.value = "Syncing Continue Watching..."
-                syncTraktPlaybackInternal(traktToken)?.let { errors.add(it) }
-            }
+            try {
+                SyncCoordinator.dataMutex.withLock {
+                    if (runTrakt && traktWatchlistEnabled && isTraktSessionStillValid(traktGen) && preferencesRepository.traktAccessToken.first().isNotBlank()) {
+                        _traktStatusMessage.value = "Syncing Trakt watchlist…"
+                        _syncStatusMessage.value = "Syncing Trakt Watchlist…"
+                        val out = syncTraktWatchlistInternal(activeTraktToken, syncProfileId, traktGen)
+                        if (out.activeToken.isNotBlank()) activeTraktToken = out.activeToken
+                        out.error?.let { traktErrors.add(it) }
+                        if (out.didMutateLocal) didMutateLocal = true
+                    }
 
-            // 4. Simkl Playback / Watching Progress (Two-Way Continue Watching)
-            if (simklToken.isNotBlank() && (simklWatchlistEnabled || simklHistoryEnabled)) {
-                _syncStatusMessage.value = "Syncing Simkl Watching Progress..."
-                syncSimklPlaybackInternal(simklToken)?.let { errors.add(it) }
-            }
+                    if (runSimkl && simklWatchlistEnabled && isSimklSessionStillValid(simklGen) && preferencesRepository.simklAccessToken.first().isNotBlank()) {
+                        _simklStatusMessage.value = "Syncing Simkl watchlist…"
+                        _syncStatusMessage.value = "Syncing Simkl Watchlist…"
+                        val out = syncSimklWatchlistInternal(simklToken, syncProfileId, simklGen)
+                        out.error?.let { simklErrors.add(it) }
+                        if (out.didMutateLocal) didMutateLocal = true
+                    }
 
-            // 5. Trakt Watch History (Two-Way Completed & History)
-            if (traktToken.isNotBlank() && traktHistoryEnabled) {
-                _syncStatusMessage.value = "Syncing Trakt Watch History..."
-                syncTraktHistoryInternal(traktToken)?.let { errors.add(it) }
-            }
+                    if (runTrakt && traktPlaybackEnabled && isTraktSessionStillValid(traktGen) && preferencesRepository.traktAccessToken.first().isNotBlank()) {
+                        _traktStatusMessage.value = "Syncing resume points…"
+                        _syncStatusMessage.value = "Syncing Continue Watching…"
+                        val out = syncTraktPlaybackInternal(activeTraktToken, syncProfileId, traktGen)
+                        if (out.activeToken.isNotBlank()) activeTraktToken = out.activeToken
+                        out.error?.let { traktErrors.add(it) }
+                        if (out.didMutateLocal) didMutateLocal = true
+                    }
 
-            // 6. Simkl History (Two-Way Completed & History)
-            if (simklToken.isNotBlank() && simklHistoryEnabled) {
-                _syncStatusMessage.value = "Syncing Simkl Watch History..."
-                syncSimklHistoryInternal(simklToken)?.let { errors.add(it) }
-            }
+                    if (runSimkl && (simklWatchlistEnabled || simklHistoryEnabled) && isSimklSessionStillValid(simklGen) && preferencesRepository.simklAccessToken.first().isNotBlank()) {
+                        _simklStatusMessage.value = "Syncing watching progress…"
+                        _syncStatusMessage.value = "Syncing Simkl Watching Progress…"
+                        val out = syncSimklPlaybackInternal(simklToken, syncProfileId, simklGen)
+                        out.error?.let { simklErrors.add(it) }
+                        if (out.didMutateLocal) didMutateLocal = true
+                    }
 
-            // 7. Trakt Custom Lists & Playlists (Two-Way Playlists & Favorites)
-            if (traktToken.isNotBlank() && traktListsEnabled) {
-                _syncStatusMessage.value = "Syncing Custom Playlists..."
-                syncTraktListsInternal(traktToken)?.let { errors.add(it) }
-            }
+                    if (runTrakt && traktHistoryEnabled && isTraktSessionStillValid(traktGen) && preferencesRepository.traktAccessToken.first().isNotBlank()) {
+                        _traktStatusMessage.value = "Syncing watch history…"
+                        _syncStatusMessage.value = "Syncing Trakt Watch History…"
+                        val out = syncTraktHistoryInternal(activeTraktToken, syncProfileId, traktGen)
+                        if (out.activeToken.isNotBlank()) activeTraktToken = out.activeToken
+                        out.error?.let { traktErrors.add(it) }
+                        if (out.didMutateLocal) didMutateLocal = true
+                    }
 
-            // 8. Repair any remaining local items missing poster/backdrop artwork
-            repairMissingLocalPosters()
+                    if (runSimkl && simklHistoryEnabled && isSimklSessionStillValid(simklGen) && preferencesRepository.simklAccessToken.first().isNotBlank()) {
+                        _simklStatusMessage.value = "Syncing watch history…"
+                        _syncStatusMessage.value = "Syncing Simkl Watch History…"
+                        val out = syncSimklHistoryInternal(simklToken, syncProfileId, simklGen)
+                        out.error?.let { simklErrors.add(it) }
+                        if (out.didMutateLocal) didMutateLocal = true
+                    }
 
-            val timestamp = System.currentTimeMillis()
-            preferencesRepository.setLastMediaSyncTimestamp(timestamp)
+                    if (runTrakt && traktListsEnabled && isTraktSessionStillValid(traktGen) && preferencesRepository.traktAccessToken.first().isNotBlank()) {
+                        _traktStatusMessage.value = "Syncing custom playlists…"
+                        _syncStatusMessage.value = "Syncing Custom Playlists…"
+                        val out = syncTraktListsInternal(activeTraktToken, syncProfileId, traktGen)
+                        if (out.activeToken.isNotBlank()) activeTraktToken = out.activeToken
+                        out.error?.let { traktErrors.add(it) }
+                        if (out.didMutateLocal) didMutateLocal = true
+                    }
 
-            if (errors.isNotEmpty()) {
-                val combinedErr = errors.first()
-                _syncError.value = combinedErr
-                _syncStatusMessage.value = "Synced with warnings: $combinedErr"
-                Log.w(TAG, "Media sync completed with warnings: $errors")
-            } else {
-                _syncStatusMessage.value = "Synchronization completed successfully"
-                Log.i(TAG, "Media sync finished successfully at $timestamp")
-            }
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Log.e(TAG, "Media sync failed", e)
-            _syncError.value = e.message ?: "Sync encountered an unexpected error"
-            _syncStatusMessage.value = "Sync failed: ${e.message}"
-            Result.failure(e)
-        } finally {
-            _isSyncing.value = false
-            scope.launch {
-                delay(3500)
-                if (_syncStatusMessage.value?.startsWith("Sync") == true) {
-                    _syncStatusMessage.value = null
+                    repairMissingLocalPosters(syncProfileId)
+                }
+
+                // Trigger Google Cloud sync AFTER releasing dataMutex if trackers modified local data
+                if (didMutateLocal) {
+                    SupabaseSyncManager.getInstance(context).scheduleSync(1500L)
+                }
+
+                val timestamp = System.currentTimeMillis()
+                var anyTimestampSaved = false
+
+                if (runTrakt && isTraktSessionStillValid(traktGen) && preferencesRepository.traktAccessToken.first().isNotBlank()) {
+                    if (traktErrors.isEmpty()) {
+                        preferencesRepository.setTraktLastSyncTimestamp(timestamp)
+                        anyTimestampSaved = true
+                        _traktSyncError.value = null
+                        _traktStatusMessage.value = null
+                    } else {
+                        val firstErr = traktErrors.first()
+                        _traktSyncError.value = firstErr
+                        _traktStatusMessage.value = "Sync warning: $firstErr"
+                    }
+                }
+
+                if (runSimkl && isSimklSessionStillValid(simklGen) && preferencesRepository.simklAccessToken.first().isNotBlank()) {
+                    if (simklErrors.isEmpty()) {
+                        preferencesRepository.setSimklLastSyncTimestamp(timestamp)
+                        anyTimestampSaved = true
+                        _simklSyncError.value = null
+                        _simklStatusMessage.value = null
+                    } else {
+                        val firstErr = simklErrors.first()
+                        _simklSyncError.value = firstErr
+                        _simklStatusMessage.value = "Sync warning: $firstErr"
+                    }
+                }
+
+                if (anyTimestampSaved) {
+                    preferencesRepository.setLastMediaSyncTimestamp(timestamp)
+                }
+
+                val combinedErrors = traktErrors + simklErrors
+                if (combinedErrors.isNotEmpty()) {
+                    val combinedErr = combinedErrors.first()
+                    _syncError.value = combinedErr
+                    _syncStatusMessage.value = "Synced with warnings: $combinedErr"
+                    Log.w(TAG, "Media sync completed with warnings: $combinedErrors")
+                } else {
+                    _syncStatusMessage.value = "Synchronization completed successfully"
+                    Log.i(TAG, "Media sync ($target) finished successfully at $timestamp")
+                }
+                Result.success(Unit)
+            } catch (e: Exception) {
+                Log.e(TAG, "Media sync ($target) failed", e)
+                val msg = e.message ?: "Sync encountered an unexpected error"
+                if (runTrakt && isTraktSessionStillValid(traktGen)) {
+                    _traktSyncError.value = msg
+                    _traktStatusMessage.value = "Sync failed: $msg"
+                }
+                if (runSimkl && isSimklSessionStillValid(simklGen)) {
+                    _simklSyncError.value = msg
+                    _simklStatusMessage.value = "Sync failed: $msg"
+                }
+                _syncError.value = msg
+                _syncStatusMessage.value = "Sync failed: $msg"
+                Result.failure(e)
+            } finally {
+                _isTraktSyncing.value = false
+                _isSimklSyncing.value = false
+                _isSyncing.value = false
+                scope.launch {
+                    delay(3500)
+                    if (_syncStatusMessage.value?.startsWith("Sync") == true) {
+                        _syncStatusMessage.value = null
+                    }
                 }
             }
         }
+
+        val queuedTarget = pendingTarget.getAndSet(null)
+        if (queuedTarget != null) {
+            scope.launch {
+                syncTarget(queuedTarget, force = true)
+            }
+        }
+
+        result
     }
 
     /* -------------------------------------------------------------------------- */
     /*                               TRAKT WATCHLIST                               */
     /* -------------------------------------------------------------------------- */
 
-    private suspend fun syncTraktWatchlistInternal(token: String): String? {
-        val profileId = currentProfileId()
-        val result = traktClient.getWatchlist(token)
+    private suspend fun syncTraktWatchlistInternal(
+        token: String,
+        profileId: String,
+        traktGen: Long
+    ): SubSyncOutcome {
+        val (activeToken, result) = withTraktTokenRetry(token) { t -> traktClient.getWatchlist(t) }
         if (result.isFailure) {
             val msg = result.exceptionOrNull()?.message ?: "Failed to fetch Trakt watchlist"
             Log.w(TAG, msg)
-            return msg
+            return SubSyncOutcome(error = msg, activeToken = activeToken)
+        }
+        if (!isTraktSessionStillValid(traktGen)) {
+            return SubSyncOutcome(activeToken = activeToken)
         }
 
         val remoteItems = result.getOrNull() ?: emptyList()
-        val localItems = watchlistDao.getAllWatchlist().filter { it.profileId == profileId }
-        val localByMediaId = localItems.associateBy { it.mediaId }.toMutableMap()
+        val allLocal = watchlistDao.getAllWatchlistIncludingDeleted(profileId)
+        val localByMediaId = allLocal.associateBy { it.mediaId }.toMutableMap()
 
-        // 1. Remote -> Local (Pull & Hydrate with TMDB posters/backdrops)
+        var mutated = false
+        val removedRemoteKeys = mutableSetOf<String>()
+        val removeMovies = mutableListOf<TraktMovie>()
+        val removeShows = mutableListOf<TraktShow>()
+
         for (item in remoteItems) {
+            if (!isTraktSessionStillValid(traktGen)) break
             val isMovie = item.type.equals("movie", ignoreCase = true)
             val movie = item.movie
             val show = item.show
@@ -588,45 +816,101 @@ class MediaSyncManager private constructor(
                 ?: imdbId?.let { localByMediaId[it] }
                 ?: tmdbId?.toString()?.let { localByMediaId[it] }
 
-            val addedEpoch = parseIsoTimestamp(item.listed_at) ?: System.currentTimeMillis()
-
-            if (existing == null) {
-                val entity = WatchlistEntity(
-                    mediaId = hydrated.mediaId,
-                    profileId = profileId,
-                    title = hydrated.title,
-                    posterUrl = hydrated.posterUrl,
-                    backdropUrl = hydrated.backdropUrl,
-                    mediaType = if (isMovie) "MOVIE" else "TV_SERIES",
-                    rating = hydrated.rating,
-                    year = hydrated.year,
-                    status = "TO_BE_WATCHED",
-                    addedTimestamp = addedEpoch
-                )
-                watchlistDao.insert(entity)
-                localByMediaId[hydrated.mediaId] = entity
-            } else if (existing.posterUrl.isNullOrBlank() && !hydrated.posterUrl.isNullOrBlank()) {
-                val updated = existing.copy(
-                    posterUrl = hydrated.posterUrl,
-                    backdropUrl = existing.backdropUrl ?: hydrated.backdropUrl,
-                    rating = existing.rating ?: hydrated.rating,
-                    year = existing.year ?: hydrated.year
-                )
-                watchlistDao.insert(updated)
-                localByMediaId[existing.mediaId] = updated
+            val addedEpoch = parseIsoTimestamp(item.listed_at)
+            when (TrackerReconciliationPolicy.decideWatchlistPull(existing, addedEpoch)) {
+                TrackerReconciliationPolicy.WatchlistPullAction.INSERT_LOCAL -> {
+                    val now = System.currentTimeMillis()
+                    val effectiveAdded = addedEpoch ?: now
+                    val entity = WatchlistEntity(
+                        mediaId = hydrated.mediaId,
+                        profileId = profileId,
+                        title = hydrated.title,
+                        posterUrl = hydrated.posterUrl,
+                        backdropUrl = hydrated.backdropUrl,
+                        mediaType = if (isMovie) "MOVIE" else "TV_SERIES",
+                        rating = hydrated.rating,
+                        year = hydrated.year,
+                        status = "TO_BE_WATCHED",
+                        addedTimestamp = effectiveAdded,
+                        isDirty = true,
+                        isDeleted = false,
+                        clientUpdatedAtMs = maxOf(now, effectiveAdded)
+                    )
+                    watchlistDao.insert(entity)
+                    localByMediaId[hydrated.mediaId] = entity
+                    mutated = true
+                }
+                TrackerReconciliationPolicy.WatchlistPullAction.RESURRECT_REMOTE_NEWER -> {
+                    val cur = existing!!
+                    val now = System.currentTimeMillis()
+                    val nextTs = maxOf(now, maxOf(cur.clientUpdatedAtMs + 1L, addedEpoch ?: 0L))
+                    val updated = cur.copy(
+                        title = hydrated.title.ifBlank { cur.title },
+                        posterUrl = cur.posterUrl ?: hydrated.posterUrl,
+                        backdropUrl = cur.backdropUrl ?: hydrated.backdropUrl,
+                        rating = cur.rating ?: hydrated.rating,
+                        year = cur.year ?: hydrated.year,
+                        status = "TO_BE_WATCHED",
+                        addedTimestamp = addedEpoch ?: cur.addedTimestamp,
+                        isDeleted = false,
+                        isDirty = true,
+                        clientUpdatedAtMs = nextTs
+                    )
+                    watchlistDao.insert(updated)
+                    localByMediaId[cur.mediaId] = updated
+                    mutated = true
+                }
+                TrackerReconciliationPolicy.WatchlistPullAction.SKIP_LOCAL_TOMBSTONE_AND_REMOVE_REMOTE -> {
+                    tmdbId?.let { removedRemoteKeys.add(it.toString()) }
+                    imdbId?.let { removedRemoteKeys.add(it) }
+                    removedRemoteKeys.add(hydrated.mediaId)
+                    val ids = TraktIds(tmdb = tmdbId, imdb = imdbId)
+                    if (isMovie) {
+                        removeMovies.add(TraktMovie(title = title, year = year, ids = ids))
+                    } else {
+                        removeShows.add(TraktShow(title = title, year = year, ids = ids))
+                    }
+                }
+                TrackerReconciliationPolicy.WatchlistPullAction.KEEP_LOCAL -> {
+                    val cur = existing!!
+                    if ((cur.posterUrl.isNullOrBlank() || cur.backdropUrl.isNullOrBlank()) &&
+                        !hydrated.posterUrl.isNullOrBlank()
+                    ) {
+                        watchlistDao.backfillArtwork(
+                            mediaId = cur.mediaId,
+                            profileId = profileId,
+                            posterUrl = hydrated.posterUrl,
+                            backdropUrl = hydrated.backdropUrl ?: hydrated.posterUrl,
+                            rating = hydrated.rating,
+                            year = hydrated.year
+                        )
+                    }
+                }
             }
         }
 
-        // 2. Local -> Remote (Push unsynced local watchlist items to Trakt)
-        val remoteTmdbIds = remoteItems.mapNotNull { it.movie?.ids?.tmdb ?: it.show?.ids?.tmdb }.map { it.toString() }.toSet()
-        val remoteImdbIds = remoteItems.mapNotNull { it.movie?.ids?.imdb ?: it.show?.ids?.imdb }.toSet()
-        val remoteTitles = remoteItems.mapNotNull { (it.movie?.title ?: it.show?.title)?.lowercase()?.trim() }.toSet()
+        if ((removeMovies.isNotEmpty() || removeShows.isNotEmpty()) && isTraktSessionStillValid(traktGen)) {
+            traktClient.removeFromWatchlist(
+                activeToken,
+                TraktSyncItemsPayload(movies = removeMovies, shows = removeShows)
+            )
+        }
+
+        val remoteTmdbIds = remoteItems.mapNotNull { it.movie?.ids?.tmdb ?: it.show?.ids?.tmdb }
+            .map { it.toString() }.filterNot { it in removedRemoteKeys }.toSet()
+        val remoteImdbIds = remoteItems.mapNotNull { it.movie?.ids?.imdb ?: it.show?.ids?.imdb }
+            .filterNot { it in removedRemoteKeys }.toSet()
+        val remoteTitles = remoteItems.filter { item ->
+            val t = (item.movie?.ids?.tmdb ?: item.show?.ids?.tmdb)?.toString()
+            val im = item.movie?.ids?.imdb ?: item.show?.ids?.imdb
+            t !in removedRemoteKeys && im !in removedRemoteKeys
+        }.mapNotNull { (it.movie?.title ?: it.show?.title)?.lowercase()?.trim() }.toSet()
 
         val unsyncedMovies = mutableListOf<TraktMovie>()
         val unsyncedShows = mutableListOf<TraktShow>()
 
-        for (local in localItems) {
-            if (local.status.equals("COMPLETED", ignoreCase = true)) continue
+        for (local in allLocal) {
+            if (local.isDeleted || local.status.equals("COMPLETED", ignoreCase = true)) continue
             val isMovie = local.mediaType.equals("MOVIE", ignoreCase = true)
             val hydrated = hydrateMediaMeta(
                 rawMediaId = local.mediaId,
@@ -655,35 +939,44 @@ class MediaSyncManager private constructor(
             }
         }
 
-        if (unsyncedMovies.isNotEmpty() || unsyncedShows.isNotEmpty()) {
+        if ((unsyncedMovies.isNotEmpty() || unsyncedShows.isNotEmpty()) && isTraktSessionStillValid(traktGen)) {
             val payload = TraktSyncItemsPayload(movies = unsyncedMovies, shows = unsyncedShows)
-            val pushRes = traktClient.addToWatchlist(token, payload)
+            val (_, pushRes) = withTraktTokenRetry(activeToken) { t -> traktClient.addToWatchlist(t, payload) }
             if (pushRes.isFailure) {
                 Log.w(TAG, "Failed to push local watchlist to Trakt: ${pushRes.exceptionOrNull()?.message}")
             }
         }
-        return null
+        return SubSyncOutcome(didMutateLocal = mutated, activeToken = activeToken)
     }
 
     /* -------------------------------------------------------------------------- */
     /*                               SIMKL WATCHLIST                               */
     /* -------------------------------------------------------------------------- */
 
-    private suspend fun syncSimklWatchlistInternal(token: String): String? {
-        val profileId = currentProfileId()
+    private suspend fun syncSimklWatchlistInternal(
+        token: String,
+        profileId: String,
+        simklGen: Long
+    ): SubSyncOutcome {
         val result = simklClient.getAllItems(token, "plantowatch")
         if (result.isFailure) {
             val msg = result.exceptionOrNull()?.message ?: "Failed to fetch Simkl watchlist"
             Log.w(TAG, msg)
-            return msg
+            return SubSyncOutcome(error = msg)
         }
+        if (!isSimklSessionStillValid(simklGen)) return SubSyncOutcome()
 
-        val parsed = result.getOrNull() ?: return null
-        val localItems = watchlistDao.getAllWatchlist().filter { it.profileId == profileId }
-        val localByMediaId = localItems.associateBy { it.mediaId }.toMutableMap()
+        val parsed = result.getOrNull() ?: return SubSyncOutcome()
+        val allLocal = watchlistDao.getAllWatchlistIncludingDeleted(profileId)
+        val localByMediaId = allLocal.associateBy { it.mediaId }.toMutableMap()
 
-        // 1. Remote -> Local: Process Movies
+        var mutated = false
+        val removeMovies = mutableListOf<SimklSyncItem>()
+        val removeShows = mutableListOf<SimklSyncItem>()
+        val removedRemoteKeys = mutableSetOf<String>()
+
         for (m in parsed.movies) {
+            if (!isSimklSessionStillValid(simklGen)) break
             val movie = m.movie ?: continue
             val tmdbId = movie.ids?.tmdb
             val imdbId = movie.ids?.imdb
@@ -696,36 +989,86 @@ class MediaSyncManager private constructor(
                 isTv = false
             )
             val existing = localByMediaId[hydrated.mediaId]
-            if (existing == null) {
-                val entity = WatchlistEntity(
-                    mediaId = hydrated.mediaId,
-                    profileId = profileId,
-                    title = hydrated.title,
-                    posterUrl = hydrated.posterUrl,
-                    backdropUrl = hydrated.backdropUrl,
-                    mediaType = "MOVIE",
-                    rating = hydrated.rating,
-                    year = hydrated.year,
-                    status = "TO_BE_WATCHED",
-                    addedTimestamp = System.currentTimeMillis()
-                )
-                watchlistDao.insert(entity)
-                localByMediaId[hydrated.mediaId] = entity
-            } else if (existing.posterUrl.isNullOrBlank() && !hydrated.posterUrl.isNullOrBlank()) {
-                watchlistDao.insert(
-                    existing.copy(
+                ?: imdbId?.let { localByMediaId[it] }
+                ?: tmdbId?.toString()?.let { localByMediaId[it] }
+            val addedEpoch = parseIsoTimestamp(m.last_watched_at)
+
+            when (TrackerReconciliationPolicy.decideWatchlistPull(existing, addedEpoch)) {
+                TrackerReconciliationPolicy.WatchlistPullAction.INSERT_LOCAL -> {
+                    val now = System.currentTimeMillis()
+                    val effectiveAdded = addedEpoch ?: now
+                    val entity = WatchlistEntity(
+                        mediaId = hydrated.mediaId,
+                        profileId = profileId,
+                        title = hydrated.title,
                         posterUrl = hydrated.posterUrl,
-                        backdropUrl = existing.backdropUrl ?: hydrated.backdropUrl,
-                        rating = existing.rating ?: hydrated.rating,
-                        year = existing.year ?: hydrated.year
+                        backdropUrl = hydrated.backdropUrl,
+                        mediaType = "MOVIE",
+                        rating = hydrated.rating,
+                        year = hydrated.year,
+                        status = "TO_BE_WATCHED",
+                        addedTimestamp = effectiveAdded,
+                        isDirty = true,
+                        isDeleted = false,
+                        clientUpdatedAtMs = maxOf(now, effectiveAdded)
                     )
-                )
+                    watchlistDao.insert(entity)
+                    localByMediaId[hydrated.mediaId] = entity
+                    mutated = true
+                }
+                TrackerReconciliationPolicy.WatchlistPullAction.RESURRECT_REMOTE_NEWER -> {
+                    val cur = existing!!
+                    val now = System.currentTimeMillis()
+                    val nextTs = maxOf(now, maxOf(cur.clientUpdatedAtMs + 1L, addedEpoch ?: 0L))
+                    val updated = cur.copy(
+                        title = hydrated.title.ifBlank { cur.title },
+                        posterUrl = cur.posterUrl ?: hydrated.posterUrl,
+                        backdropUrl = cur.backdropUrl ?: hydrated.backdropUrl,
+                        rating = cur.rating ?: hydrated.rating,
+                        year = cur.year ?: hydrated.year,
+                        status = "TO_BE_WATCHED",
+                        isDeleted = false,
+                        isDirty = true,
+                        clientUpdatedAtMs = nextTs
+                    )
+                    watchlistDao.insert(updated)
+                    localByMediaId[cur.mediaId] = updated
+                    mutated = true
+                }
+                TrackerReconciliationPolicy.WatchlistPullAction.SKIP_LOCAL_TOMBSTONE_AND_REMOVE_REMOTE -> {
+                    tmdbId?.let { removedRemoteKeys.add(it.toString()) }
+                    imdbId?.let { removedRemoteKeys.add(it) }
+                    removedRemoteKeys.add(hydrated.mediaId)
+                    removeMovies.add(
+                        SimklSyncItem(
+                            title = movie.title,
+                            ids = SimklIds(simkl = movie.ids?.simkl, imdb = imdbId, tmdb = tmdbId)
+                        )
+                    )
+                }
+                TrackerReconciliationPolicy.WatchlistPullAction.KEEP_LOCAL -> {
+                    val cur = existing!!
+                    if ((cur.posterUrl.isNullOrBlank() || cur.backdropUrl.isNullOrBlank()) &&
+                        !hydrated.posterUrl.isNullOrBlank()
+                    ) {
+                        watchlistDao.backfillArtwork(
+                            mediaId = cur.mediaId,
+                            profileId = profileId,
+                            posterUrl = hydrated.posterUrl,
+                            backdropUrl = hydrated.backdropUrl ?: hydrated.posterUrl,
+                            rating = hydrated.rating,
+                            year = hydrated.year
+                        )
+                    }
+                }
             }
         }
 
-        // Process Shows & Anime
-        val allShows = parsed.shows.mapNotNull { it.show } + parsed.anime.mapNotNull { it.anime }
-        for (show in allShows) {
+        val allShowEntries = parsed.shows.mapNotNull { entry -> entry.show?.let { it to entry.last_watched_at } } +
+            parsed.anime.mapNotNull { entry -> entry.anime?.let { it to entry.last_watched_at } }
+
+        for ((show, lastWatchedStr) in allShowEntries) {
+            if (!isSimklSessionStillValid(simklGen)) break
             val tmdbId = show.ids?.tmdb
             val imdbId = show.ids?.imdb
             val hydrated = hydrateMediaMeta(
@@ -737,50 +1080,106 @@ class MediaSyncManager private constructor(
                 isTv = true
             )
             val existing = localByMediaId[hydrated.mediaId]
-            if (existing == null) {
-                val entity = WatchlistEntity(
-                    mediaId = hydrated.mediaId,
-                    profileId = profileId,
-                    title = hydrated.title,
-                    posterUrl = hydrated.posterUrl,
-                    backdropUrl = hydrated.backdropUrl,
-                    mediaType = "TV_SERIES",
-                    rating = hydrated.rating,
-                    year = hydrated.year,
-                    status = "TO_BE_WATCHED",
-                    addedTimestamp = System.currentTimeMillis()
-                )
-                watchlistDao.insert(entity)
-                localByMediaId[hydrated.mediaId] = entity
-            } else if (existing.posterUrl.isNullOrBlank() && !hydrated.posterUrl.isNullOrBlank()) {
-                watchlistDao.insert(
-                    existing.copy(
+                ?: imdbId?.let { localByMediaId[it] }
+                ?: tmdbId?.toString()?.let { localByMediaId[it] }
+            val addedEpoch = parseIsoTimestamp(lastWatchedStr)
+
+            when (TrackerReconciliationPolicy.decideWatchlistPull(existing, addedEpoch)) {
+                TrackerReconciliationPolicy.WatchlistPullAction.INSERT_LOCAL -> {
+                    val now = System.currentTimeMillis()
+                    val effectiveAdded = addedEpoch ?: now
+                    val entity = WatchlistEntity(
+                        mediaId = hydrated.mediaId,
+                        profileId = profileId,
+                        title = hydrated.title,
                         posterUrl = hydrated.posterUrl,
-                        backdropUrl = existing.backdropUrl ?: hydrated.backdropUrl,
-                        rating = existing.rating ?: hydrated.rating,
-                        year = existing.year ?: hydrated.year
+                        backdropUrl = hydrated.backdropUrl,
+                        mediaType = "TV_SERIES",
+                        rating = hydrated.rating,
+                        year = hydrated.year,
+                        status = "TO_BE_WATCHED",
+                        addedTimestamp = effectiveAdded,
+                        isDirty = true,
+                        isDeleted = false,
+                        clientUpdatedAtMs = maxOf(now, effectiveAdded)
                     )
-                )
+                    watchlistDao.insert(entity)
+                    localByMediaId[hydrated.mediaId] = entity
+                    mutated = true
+                }
+                TrackerReconciliationPolicy.WatchlistPullAction.RESURRECT_REMOTE_NEWER -> {
+                    val cur = existing!!
+                    val now = System.currentTimeMillis()
+                    val nextTs = maxOf(now, maxOf(cur.clientUpdatedAtMs + 1L, addedEpoch ?: 0L))
+                    val updated = cur.copy(
+                        title = hydrated.title.ifBlank { cur.title },
+                        posterUrl = cur.posterUrl ?: hydrated.posterUrl,
+                        backdropUrl = cur.backdropUrl ?: hydrated.backdropUrl,
+                        rating = cur.rating ?: hydrated.rating,
+                        year = cur.year ?: hydrated.year,
+                        status = "TO_BE_WATCHED",
+                        isDeleted = false,
+                        isDirty = true,
+                        clientUpdatedAtMs = nextTs
+                    )
+                    watchlistDao.insert(updated)
+                    localByMediaId[cur.mediaId] = updated
+                    mutated = true
+                }
+                TrackerReconciliationPolicy.WatchlistPullAction.SKIP_LOCAL_TOMBSTONE_AND_REMOVE_REMOTE -> {
+                    tmdbId?.let { removedRemoteKeys.add(it.toString()) }
+                    imdbId?.let { removedRemoteKeys.add(it) }
+                    removedRemoteKeys.add(hydrated.mediaId)
+                    removeShows.add(
+                        SimklSyncItem(
+                            title = show.title,
+                            ids = SimklIds(simkl = show.ids?.simkl, imdb = imdbId, tmdb = tmdbId)
+                        )
+                    )
+                }
+                TrackerReconciliationPolicy.WatchlistPullAction.KEEP_LOCAL -> {
+                    val cur = existing!!
+                    if ((cur.posterUrl.isNullOrBlank() || cur.backdropUrl.isNullOrBlank()) &&
+                        !hydrated.posterUrl.isNullOrBlank()
+                    ) {
+                        watchlistDao.backfillArtwork(
+                            mediaId = cur.mediaId,
+                            profileId = profileId,
+                            posterUrl = hydrated.posterUrl,
+                            backdropUrl = hydrated.backdropUrl ?: hydrated.posterUrl,
+                            rating = hydrated.rating,
+                            year = hydrated.year
+                        )
+                    }
+                }
             }
         }
 
-        // 2. Local -> Remote: Push unsynced local watchlist items to Simkl
+        if ((removeMovies.isNotEmpty() || removeShows.isNotEmpty()) && isSimklSessionStillValid(simklGen)) {
+            for (movieChunk in removeMovies.chunked(50)) {
+                simklClient.removeFromLibrary(token, SimklSyncPayload(movies = movieChunk))
+            }
+            for (showChunk in removeShows.chunked(50)) {
+                simklClient.removeFromLibrary(token, SimklSyncPayload(shows = showChunk))
+            }
+        }
+
         val remoteTmdbIds = (
             parsed.movies.mapNotNull { it.movie?.ids?.tmdb } +
-            parsed.shows.mapNotNull { it.show?.ids?.tmdb } +
-            parsed.anime.mapNotNull { it.anime?.ids?.tmdb }
-        ).map { it.toString() }.toSet()
+                parsed.shows.mapNotNull { it.show?.ids?.tmdb } +
+                parsed.anime.mapNotNull { it.anime?.ids?.tmdb }
+            ).map { it.toString() }.filterNot { it in removedRemoteKeys }.toSet()
         val remoteImdbIds = (
             parsed.movies.mapNotNull { it.movie?.ids?.imdb } +
-            parsed.shows.mapNotNull { it.show?.ids?.imdb } +
-            parsed.anime.mapNotNull { it.anime?.ids?.imdb }
-        ).toSet()
+                parsed.shows.mapNotNull { it.show?.ids?.imdb } +
+                parsed.anime.mapNotNull { it.anime?.ids?.imdb }
+            ).filterNot { it in removedRemoteKeys }.toSet()
 
         val pushMovies = mutableListOf<SimklSyncItem>()
         val pushShows = mutableListOf<SimklSyncItem>()
 
-        for (local in localItems) {
-            if (local.status.equals("COMPLETED", ignoreCase = true)) continue
+        for (local in allLocal) {
+            if (local.isDeleted || local.status.equals("COMPLETED", ignoreCase = true)) continue
             val isMovie = local.mediaType.equals("MOVIE", ignoreCase = true)
             val tmdbId = local.mediaId.toLongOrNull()
             val imdbId = if (local.mediaId.startsWith("tt")) local.mediaId else null
@@ -796,36 +1195,48 @@ class MediaSyncManager private constructor(
             }
         }
 
-        if (pushMovies.isNotEmpty() || pushShows.isNotEmpty()) {
-            val payload = SimklSyncPayload(movies = pushMovies.take(50), shows = pushShows.take(50))
-            simklClient.addToLibrary(token, payload)
+        if (isSimklSessionStillValid(simklGen)) {
+            val maxBatches = maxOf((pushMovies.size + 49) / 50, (pushShows.size + 49) / 50)
+            for (batchIndex in 0 until maxBatches) {
+                val mSlice = pushMovies.drop(batchIndex * 50).take(50)
+                val sSlice = pushShows.drop(batchIndex * 50).take(50)
+                if (mSlice.isNotEmpty() || sSlice.isNotEmpty()) {
+                    simklClient.addToLibrary(token, SimklSyncPayload(movies = mSlice, shows = sSlice))
+                }
+            }
         }
-        return null
+        return SubSyncOutcome(didMutateLocal = mutated)
     }
 
     /* -------------------------------------------------------------------------- */
     /*                  TRAKT PLAYBACK (TWO-WAY CONTINUE WATCHING)                 */
     /* -------------------------------------------------------------------------- */
 
-    private suspend fun syncTraktPlaybackInternal(token: String): String? {
-        val profileId = currentProfileId()
-        val result = traktClient.getPlayback(token)
+    private suspend fun syncTraktPlaybackInternal(
+        token: String,
+        profileId: String,
+        traktGen: Long
+    ): SubSyncOutcome {
+        val (initialToken, result) = withTraktTokenRetry(token) { t -> traktClient.getPlayback(t) }
+        var activeToken = initialToken
         if (result.isFailure) {
             val msg = result.exceptionOrNull()?.message ?: "Failed to fetch Trakt playback progress"
             Log.w(TAG, msg)
-            return msg
+            return SubSyncOutcome(error = msg, activeToken = activeToken)
         }
+        if (!isTraktSessionStillValid(traktGen)) return SubSyncOutcome(activeToken = activeToken)
 
         val remoteProgress = result.getOrNull() ?: emptyList()
-        val allLocalHistory = playbackHistoryDao.getAllHistory().filter { it.profileId == profileId }
+        val allLocalHistory = playbackHistoryDao.getAllHistoryIncludingDeleted(profileId)
 
-        // 1. Remote -> Local (Pull paused items from Trakt into Continue Watching with TMDB hydration)
+        var mutated = false
         val remoteMatchedKeys = mutableSetOf<String>()
 
         for (item in remoteProgress) {
+            if (!isTraktSessionStillValid(traktGen)) break
             val isEpisode = item.type.equals("episode", ignoreCase = true)
             val progressPercent = item.progress.coerceIn(1f, 99f)
-            val pausedEpoch = parseIsoTimestamp(item.paused_at) ?: System.currentTimeMillis()
+            val pausedEpoch = parseIsoTimestamp(item.paused_at)
 
             if (isEpisode) {
                 val show = item.show ?: continue
@@ -841,44 +1252,83 @@ class MediaSyncManager private constructor(
                 val mediaId = hydrated.mediaId
                 val seasonNum = episode.season.coerceAtLeast(1)
                 val epNum = episode.number.coerceAtLeast(1)
-                remoteMatchedKeys.add("${mediaId}_s${seasonNum}_e${epNum}")
-                hydrated.tmdbId?.let { remoteMatchedKeys.add("${it}_s${seasonNum}_e${epNum}") }
-                hydrated.imdbId?.let { remoteMatchedKeys.add("${it}_s${seasonNum}_e${epNum}") }
 
-                val existing = allLocalHistory.firstOrNull {
+                val matchingRows = allLocalHistory.filter {
                     (it.mediaId == mediaId || it.mediaId == hydrated.imdbId || it.mediaId == hydrated.tmdbId?.toString()) &&
                         it.seasonNumber == seasonNum && it.episodeNumber == epNum
                 }
 
-                val durationMs = existing?.durationMs?.takeIf { it > 60_000L }
-                    ?: hydrated.durationMs?.takeIf { it > 60_000L }
-                    ?: 2_700_000L
-                val positionMs = ((progressPercent / 100f) * durationMs).toLong().coerceAtLeast(5_000L)
-
-                val provider = existing?.provider ?: "tmdb"
-                val entityId = existing?.id ?: PlaybackHistoryEntity.buildId(provider, mediaId, seasonNum, epNum, profileId)
-
-                if (existing == null || existing.currentPositionMs < 1000L || existing.posterUrl.isNullOrBlank() || pausedEpoch > existing.lastWatchedTimestamp) {
-                    val entity = PlaybackHistoryEntity(
-                        id = entityId,
-                        mediaId = existing?.mediaId ?: mediaId,
-                        title = hydrated.title.ifBlank { show.title },
-                        episodeTitle = episode.title ?: existing?.episodeTitle,
-                        seasonNumber = seasonNum,
-                        episodeNumber = epNum,
-                        posterUrl = existing?.posterUrl ?: hydrated.posterUrl,
-                        backdropUrl = existing?.backdropUrl ?: hydrated.backdropUrl,
-                        currentPositionMs = if (existing != null && existing.lastWatchedTimestamp >= pausedEpoch && existing.currentPositionMs > 1000L) existing.currentPositionMs else positionMs,
-                        durationMs = durationMs,
-                        lastWatchedTimestamp = maxOf(existing?.lastWatchedTimestamp ?: 0L, pausedEpoch),
-                        isCompleted = false,
-                        provider = provider,
-                        mediaType = "TV_SERIES",
-                        episodeData = existing?.episodeData,
-                        isDismissedFromContinueWatching = false,
-                        profileId = profileId
+                when (
+                    TrackerReconciliationPolicy.decidePlaybackPull(
+                        localRowsForMedia = matchingRows,
+                        remoteEventTsMs = pausedEpoch,
+                        remoteIsCompleted = false,
+                        isSyntheticPlaceholder = false
                     )
-                    playbackHistoryDao.upsert(entity)
+                ) {
+                    TrackerReconciliationPolicy.PlaybackPullAction.SKIP_LOCAL_DELETED_OR_DISMISSED -> {
+                        if (item.id > 0L && isTraktSessionStillValid(traktGen)) {
+                            traktClient.removePlayback(activeToken, item.id)
+                        }
+                    }
+                    TrackerReconciliationPolicy.PlaybackPullAction.SKIP_LOCAL_NEWER_OR_COMPLETED -> {
+                        remoteMatchedKeys.add("${mediaId}_s${seasonNum}_e${epNum}")
+                        hydrated.tmdbId?.let { remoteMatchedKeys.add("${it}_s${seasonNum}_e${epNum}") }
+                        hydrated.imdbId?.let { remoteMatchedKeys.add("${it}_s${seasonNum}_e${epNum}") }
+                        if (!hydrated.posterUrl.isNullOrBlank()) {
+                            for (row in matchingRows.filterNot { it.isDeleted }) {
+                                if (row.posterUrl.isNullOrBlank() || row.backdropUrl.isNullOrBlank()) {
+                                    playbackHistoryDao.backfillArtwork(
+                                        id = row.id,
+                                        posterUrl = hydrated.posterUrl,
+                                        backdropUrl = hydrated.backdropUrl ?: hydrated.posterUrl
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    TrackerReconciliationPolicy.PlaybackPullAction.APPLY_REMOTE -> {
+                        remoteMatchedKeys.add("${mediaId}_s${seasonNum}_e${epNum}")
+                        hydrated.tmdbId?.let { remoteMatchedKeys.add("${it}_s${seasonNum}_e${epNum}") }
+                        hydrated.imdbId?.let { remoteMatchedKeys.add("${it}_s${seasonNum}_e${epNum}") }
+
+                        val preferred = matchingRows.firstOrNull { !it.isDeleted } ?: matchingRows.firstOrNull()
+                        val effectivePaused = pausedEpoch ?: System.currentTimeMillis()
+                        val now = System.currentTimeMillis()
+                        val durationMs = preferred?.durationMs?.takeIf { it > 60_000L }
+                            ?: hydrated.durationMs?.takeIf { it > 60_000L }
+                            ?: 2_700_000L
+                        val positionMs = ((progressPercent / 100f) * durationMs).toLong().coerceAtLeast(5_000L)
+                        val provider = preferred?.provider ?: "tmdb"
+                        val entityId = preferred?.id ?: PlaybackHistoryEntity.buildId(provider, mediaId, seasonNum, epNum, profileId)
+                        val ts = maxOf(now, maxOf(preferred?.clientUpdatedAtMs ?: 0L, effectivePaused) + 1L)
+
+                        playbackHistoryDao.upsert(
+                            PlaybackHistoryEntity(
+                                id = entityId,
+                                mediaId = preferred?.mediaId ?: mediaId,
+                                title = hydrated.title.ifBlank { show.title },
+                                episodeTitle = episode.title ?: preferred?.episodeTitle,
+                                seasonNumber = seasonNum,
+                                episodeNumber = epNum,
+                                posterUrl = preferred?.posterUrl ?: hydrated.posterUrl,
+                                backdropUrl = preferred?.backdropUrl ?: hydrated.backdropUrl,
+                                currentPositionMs = if (preferred != null && !preferred.isDeleted && preferred.lastWatchedTimestamp >= effectivePaused && preferred.currentPositionMs > 1000L) preferred.currentPositionMs else positionMs,
+                                durationMs = durationMs,
+                                lastWatchedTimestamp = maxOf(preferred?.lastWatchedTimestamp ?: 0L, effectivePaused),
+                                isCompleted = false,
+                                provider = provider,
+                                mediaType = "TV_SERIES",
+                                episodeData = preferred?.episodeData,
+                                isDismissedFromContinueWatching = false,
+                                profileId = profileId,
+                                isDirty = true,
+                                isDeleted = false,
+                                clientUpdatedAtMs = ts
+                            )
+                        )
+                        mutated = true
+                    }
                 }
             } else {
                 val movie = item.movie ?: continue
@@ -891,57 +1341,94 @@ class MediaSyncManager private constructor(
                     isTv = false
                 )
                 val mediaId = hydrated.mediaId
-                remoteMatchedKeys.add(mediaId)
-                hydrated.tmdbId?.let { remoteMatchedKeys.add(it.toString()) }
-                hydrated.imdbId?.let { remoteMatchedKeys.add(it) }
-
-                val existing = allLocalHistory.firstOrNull {
+                val matchingRows = allLocalHistory.filter {
                     it.mediaId == mediaId || it.mediaId == hydrated.imdbId || it.mediaId == hydrated.tmdbId?.toString()
                 }
 
-                val durationMs = existing?.durationMs?.takeIf { it > 60_000L }
-                    ?: hydrated.durationMs?.takeIf { it > 60_000L }
-                    ?: 6_000_000L
-                val positionMs = ((progressPercent / 100f) * durationMs).toLong().coerceAtLeast(5_000L)
-
-                val provider = existing?.provider ?: "tmdb"
-                val entityId = existing?.id ?: PlaybackHistoryEntity.buildId(provider, mediaId, null, null, profileId)
-
-                if (existing == null || existing.currentPositionMs < 1000L || existing.posterUrl.isNullOrBlank() || pausedEpoch > existing.lastWatchedTimestamp) {
-                    val entity = PlaybackHistoryEntity(
-                        id = entityId,
-                        mediaId = existing?.mediaId ?: mediaId,
-                        title = hydrated.title.ifBlank { movie.title },
-                        episodeTitle = null,
-                        seasonNumber = null,
-                        episodeNumber = null,
-                        posterUrl = existing?.posterUrl ?: hydrated.posterUrl,
-                        backdropUrl = existing?.backdropUrl ?: hydrated.backdropUrl,
-                        currentPositionMs = if (existing != null && existing.lastWatchedTimestamp >= pausedEpoch && existing.currentPositionMs > 1000L) existing.currentPositionMs else positionMs,
-                        durationMs = durationMs,
-                        lastWatchedTimestamp = maxOf(existing?.lastWatchedTimestamp ?: 0L, pausedEpoch),
-                        isCompleted = false,
-                        provider = provider,
-                        mediaType = "MOVIE",
-                        episodeData = existing?.episodeData,
-                        isDismissedFromContinueWatching = false,
-                        profileId = profileId
+                when (
+                    TrackerReconciliationPolicy.decidePlaybackPull(
+                        localRowsForMedia = matchingRows,
+                        remoteEventTsMs = pausedEpoch,
+                        remoteIsCompleted = false,
+                        isSyntheticPlaceholder = false
                     )
-                    playbackHistoryDao.upsert(entity)
+                ) {
+                    TrackerReconciliationPolicy.PlaybackPullAction.SKIP_LOCAL_DELETED_OR_DISMISSED -> {
+                        if (item.id > 0L && isTraktSessionStillValid(traktGen)) {
+                            traktClient.removePlayback(activeToken, item.id)
+                        }
+                    }
+                    TrackerReconciliationPolicy.PlaybackPullAction.SKIP_LOCAL_NEWER_OR_COMPLETED -> {
+                        remoteMatchedKeys.add(mediaId)
+                        hydrated.tmdbId?.let { remoteMatchedKeys.add(it.toString()) }
+                        hydrated.imdbId?.let { remoteMatchedKeys.add(it) }
+                        if (!hydrated.posterUrl.isNullOrBlank()) {
+                            for (row in matchingRows.filterNot { it.isDeleted }) {
+                                if (row.posterUrl.isNullOrBlank() || row.backdropUrl.isNullOrBlank()) {
+                                    playbackHistoryDao.backfillArtwork(
+                                        id = row.id,
+                                        posterUrl = hydrated.posterUrl,
+                                        backdropUrl = hydrated.backdropUrl ?: hydrated.posterUrl
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    TrackerReconciliationPolicy.PlaybackPullAction.APPLY_REMOTE -> {
+                        remoteMatchedKeys.add(mediaId)
+                        hydrated.tmdbId?.let { remoteMatchedKeys.add(it.toString()) }
+                        hydrated.imdbId?.let { remoteMatchedKeys.add(it) }
+
+                        val preferred = matchingRows.firstOrNull { !it.isDeleted } ?: matchingRows.firstOrNull()
+                        val effectivePaused = pausedEpoch ?: System.currentTimeMillis()
+                        val now = System.currentTimeMillis()
+                        val durationMs = preferred?.durationMs?.takeIf { it > 60_000L }
+                            ?: hydrated.durationMs?.takeIf { it > 60_000L }
+                            ?: 6_000_000L
+                        val positionMs = ((progressPercent / 100f) * durationMs).toLong().coerceAtLeast(5_000L)
+                        val provider = preferred?.provider ?: "tmdb"
+                        val entityId = preferred?.id ?: PlaybackHistoryEntity.buildId(provider, mediaId, null, null, profileId)
+                        val ts = maxOf(now, maxOf(preferred?.clientUpdatedAtMs ?: 0L, effectivePaused) + 1L)
+
+                        playbackHistoryDao.upsert(
+                            PlaybackHistoryEntity(
+                                id = entityId,
+                                mediaId = preferred?.mediaId ?: mediaId,
+                                title = hydrated.title.ifBlank { movie.title },
+                                episodeTitle = null,
+                                seasonNumber = null,
+                                episodeNumber = null,
+                                posterUrl = preferred?.posterUrl ?: hydrated.posterUrl,
+                                backdropUrl = preferred?.backdropUrl ?: hydrated.backdropUrl,
+                                currentPositionMs = if (preferred != null && !preferred.isDeleted && preferred.lastWatchedTimestamp >= effectivePaused && preferred.currentPositionMs > 1000L) preferred.currentPositionMs else positionMs,
+                                durationMs = durationMs,
+                                lastWatchedTimestamp = maxOf(preferred?.lastWatchedTimestamp ?: 0L, effectivePaused),
+                                isCompleted = false,
+                                provider = provider,
+                                mediaType = "MOVIE",
+                                episodeData = preferred?.episodeData,
+                                isDismissedFromContinueWatching = false,
+                                profileId = profileId,
+                                isDirty = true,
+                                isDeleted = false,
+                                clientUpdatedAtMs = ts
+                            )
+                        )
+                        mutated = true
+                    }
                 }
             }
         }
 
-        // 2. Local -> Remote (Push local Continue Watching items to Trakt via /scrobble/pause)
         val localContinueWatching = allLocalHistory
-            .filter { !it.isCompleted && it.currentPositionMs > 1000L && !it.isDismissedFromContinueWatching }
+            .filter { !it.isDeleted && !it.isCompleted && it.currentPositionMs > 1000L && !it.isDismissedFromContinueWatching }
             .groupBy { it.mediaId }
             .mapNotNull { (_, list) -> list.maxByOrNull { it.lastWatchedTimestamp } }
 
         for (local in localContinueWatching.take(25)) {
+            if (!isTraktSessionStillValid(traktGen)) break
             val isTv = local.seasonNumber != null || local.episodeNumber != null ||
-                local.mediaType?.contains("TV", ignoreCase = true) == true ||
-                local.mediaType?.contains("ANIME", ignoreCase = true) == true
+                TrackerReconciliationPolicy.isTvMediaType(local.mediaType)
 
             val key = if (isTv) {
                 "${local.mediaId}_s${local.seasonNumber ?: 1}_e${local.episodeNumber ?: 1}"
@@ -988,29 +1475,39 @@ class MediaSyncManager private constructor(
                     progress = progressPercent
                 )
             }
-            traktClient.scrobble("pause", token, scrobbleBody)
+            val (nextTok, _) = withTraktTokenRetry(activeToken) { t ->
+                traktClient.scrobble("pause", t, scrobbleBody)
+            }
+            activeToken = nextTok
         }
-        return null
+        return SubSyncOutcome(didMutateLocal = mutated, activeToken = activeToken)
     }
 
     /* -------------------------------------------------------------------------- */
     /*                  SIMKL PLAYBACK (TWO-WAY CONTINUE WATCHING)                 */
     /* -------------------------------------------------------------------------- */
 
-    private suspend fun syncSimklPlaybackInternal(token: String): String? {
-        val profileId = currentProfileId()
+    private suspend fun syncSimklPlaybackInternal(
+        token: String,
+        profileId: String,
+        simklGen: Long
+    ): SubSyncOutcome {
         val result = simklClient.getAllItems(token, "watching")
         if (result.isFailure) {
-            return null
+            return SubSyncOutcome()
         }
+        if (!isSimklSessionStillValid(simklGen)) return SubSyncOutcome()
 
-        val parsed = result.getOrNull() ?: return null
-        val allLocalHistory = playbackHistoryDao.getAllHistory().filter { it.profileId == profileId }
+        val parsed = result.getOrNull() ?: return SubSyncOutcome()
+        val allLocalHistory = playbackHistoryDao.getAllHistoryIncludingDeleted(profileId)
         val remoteIds = mutableSetOf<String>()
+        var mutated = false
 
-        // 1. Remote -> Local: Pull Simkl "watching" items into Continue Watching & Watchlist
-        val watchingShows = parsed.shows.mapNotNull { it.show } + parsed.anime.mapNotNull { it.anime }
-        for (show in watchingShows) {
+        val watchingShows = parsed.shows.mapNotNull { e -> e.show?.let { it to e.last_watched_at } } +
+            parsed.anime.mapNotNull { e -> e.anime?.let { it to e.last_watched_at } }
+
+        for ((show, lastWatchedStr) in watchingShows) {
+            if (!isSimklSessionStillValid(simklGen)) break
             val tmdbId = show.ids?.tmdb
             val imdbId = show.ids?.imdb
             val hydrated = hydrateMediaMeta(
@@ -1022,8 +1519,21 @@ class MediaSyncManager private constructor(
                 isTv = true
             )
             remoteIds.add(hydrated.mediaId)
-            val existingHistory = allLocalHistory.firstOrNull { it.mediaId == hydrated.mediaId }
-            if (existingHistory == null) {
+            tmdbId?.let { remoteIds.add(it.toString()) }
+            imdbId?.let { remoteIds.add(it) }
+
+            val matchingRows = allLocalHistory.filter {
+                it.mediaId == hydrated.mediaId || it.mediaId == tmdbId?.toString() || it.mediaId == imdbId
+            }
+            val lastWatchedEpoch = parseIsoTimestamp(lastWatchedStr) ?: (System.currentTimeMillis() - 86_400_000L)
+
+            if (TrackerReconciliationPolicy.decidePlaybackPull(
+                    localRowsForMedia = matchingRows,
+                    remoteEventTsMs = lastWatchedEpoch,
+                    remoteIsCompleted = false,
+                    isSyntheticPlaceholder = true
+                ) == TrackerReconciliationPolicy.PlaybackPullAction.APPLY_REMOTE
+            ) {
                 val durationMs = hydrated.durationMs?.takeIf { it > 60_000L } ?: 1_440_000L
                 val entityId = PlaybackHistoryEntity.buildId("tmdb", hydrated.mediaId, 1, 1, profileId)
                 playbackHistoryDao.upsert(
@@ -1038,17 +1548,22 @@ class MediaSyncManager private constructor(
                         backdropUrl = hydrated.backdropUrl,
                         currentPositionMs = (durationMs * 0.25f).toLong(),
                         durationMs = durationMs,
-                        lastWatchedTimestamp = System.currentTimeMillis(),
+                        lastWatchedTimestamp = lastWatchedEpoch,
                         isCompleted = false,
                         provider = "tmdb",
                         mediaType = "TV_SERIES",
-                        profileId = profileId
+                        profileId = profileId,
+                        isDirty = true,
+                        isDeleted = false,
+                        clientUpdatedAtMs = lastWatchedEpoch
                     )
                 )
+                mutated = true
             }
         }
 
         for (m in parsed.movies) {
+            if (!isSimklSessionStillValid(simklGen)) break
             val movie = m.movie ?: continue
             val tmdbId = movie.ids?.tmdb
             val imdbId = movie.ids?.imdb
@@ -1061,8 +1576,21 @@ class MediaSyncManager private constructor(
                 isTv = false
             )
             remoteIds.add(hydrated.mediaId)
-            val existingHistory = allLocalHistory.firstOrNull { it.mediaId == hydrated.mediaId }
-            if (existingHistory == null) {
+            tmdbId?.let { remoteIds.add(it.toString()) }
+            imdbId?.let { remoteIds.add(it) }
+
+            val matchingRows = allLocalHistory.filter {
+                it.mediaId == hydrated.mediaId || it.mediaId == tmdbId?.toString() || it.mediaId == imdbId
+            }
+            val lastWatchedEpoch = parseIsoTimestamp(m.last_watched_at) ?: (System.currentTimeMillis() - 86_400_000L)
+
+            if (TrackerReconciliationPolicy.decidePlaybackPull(
+                    localRowsForMedia = matchingRows,
+                    remoteEventTsMs = lastWatchedEpoch,
+                    remoteIsCompleted = false,
+                    isSyntheticPlaceholder = true
+                ) == TrackerReconciliationPolicy.PlaybackPullAction.APPLY_REMOTE
+            ) {
                 val durationMs = hydrated.durationMs?.takeIf { it > 60_000L } ?: 6_000_000L
                 val entityId = PlaybackHistoryEntity.buildId("tmdb", hydrated.mediaId, null, null, profileId)
                 playbackHistoryDao.upsert(
@@ -1077,19 +1605,22 @@ class MediaSyncManager private constructor(
                         backdropUrl = hydrated.backdropUrl,
                         currentPositionMs = (durationMs * 0.25f).toLong(),
                         durationMs = durationMs,
-                        lastWatchedTimestamp = System.currentTimeMillis(),
+                        lastWatchedTimestamp = lastWatchedEpoch,
                         isCompleted = false,
                         provider = "tmdb",
                         mediaType = "MOVIE",
-                        profileId = profileId
+                        profileId = profileId,
+                        isDirty = true,
+                        isDeleted = false,
+                        clientUpdatedAtMs = lastWatchedEpoch
                     )
                 )
+                mutated = true
             }
         }
 
-        // 2. Local -> Remote: Push local Continue Watching items to Simkl
         val localContinueWatching = allLocalHistory
-            .filter { !it.isCompleted && it.currentPositionMs > 1000L && !it.isDismissedFromContinueWatching }
+            .filter { !it.isDeleted && !it.isCompleted && it.currentPositionMs > 1000L && !it.isDismissedFromContinueWatching }
             .groupBy { it.mediaId }
             .mapNotNull { (_, list) -> list.maxByOrNull { it.lastWatchedTimestamp } }
 
@@ -1099,8 +1630,7 @@ class MediaSyncManager private constructor(
         for (local in localContinueWatching.take(30)) {
             if (local.mediaId in remoteIds) continue
             val isTv = local.seasonNumber != null || local.episodeNumber != null ||
-                local.mediaType?.contains("TV", ignoreCase = true) == true ||
-                local.mediaType?.contains("ANIME", ignoreCase = true) == true
+                TrackerReconciliationPolicy.isTvMediaType(local.mediaType)
 
             val tmdbId = local.mediaId.toLongOrNull()
             val imdbId = local.mediaId.takeIf { it.startsWith("tt") }
@@ -1109,37 +1639,45 @@ class MediaSyncManager private constructor(
             if (isTv) pushShows.add(syncItem) else pushMovies.add(syncItem)
         }
 
-        if (pushMovies.isNotEmpty() || pushShows.isNotEmpty()) {
+        if ((pushMovies.isNotEmpty() || pushShows.isNotEmpty()) && isSimklSessionStillValid(simklGen)) {
             simklClient.addToLibrary(token, SimklSyncPayload(movies = pushMovies, shows = pushShows))
         }
-        return null
+        return SubSyncOutcome(didMutateLocal = mutated)
     }
 
     /* -------------------------------------------------------------------------- */
     /*                     TRAKT WATCH HISTORY (TWO-WAY COMPLETED)                 */
     /* -------------------------------------------------------------------------- */
 
-    private suspend fun syncTraktHistoryInternal(token: String): String? {
-        val profileId = currentProfileId()
-        val result = traktClient.getHistory(token, page = 1, limit = 100)
+    private suspend fun syncTraktHistoryInternal(
+        token: String,
+        profileId: String,
+        traktGen: Long
+    ): SubSyncOutcome {
+        val (initialToken, result) = withTraktTokenRetry(token) { t ->
+            traktClient.getHistory(t, page = 1, limit = 100)
+        }
+        var activeToken = initialToken
         if (result.isFailure) {
             val msg = result.exceptionOrNull()?.message ?: "Failed to fetch Trakt history"
             Log.w(TAG, msg)
-            return msg
+            return SubSyncOutcome(error = msg, activeToken = activeToken)
         }
+        if (!isTraktSessionStillValid(traktGen)) return SubSyncOutcome(activeToken = activeToken)
 
         val historyItems = result.getOrNull() ?: emptyList()
-        val allLocalHistory = playbackHistoryDao.getAllHistory().filter { it.profileId == profileId }
-        val localWatchlist = watchlistDao.getAllWatchlist().filter { it.profileId == profileId }
+        val allLocalHistory = playbackHistoryDao.getAllHistoryIncludingDeleted(profileId)
+        val allLocalWatchlist = watchlistDao.getAllWatchlistIncludingDeleted(profileId)
+        val localWatchlistMap = allLocalWatchlist.associateBy { it.mediaId }
 
         val remoteCompletedMediaIds = mutableSetOf<String>()
-
-        // 1. Remote -> Local: Populate both Watchlist status AND playback_history Completed tab
-        // Hydrate up to 35 most recent unique items so sync remains fast and responsive
+        val remoteCompletedEpisodeKeys = mutableSetOf<String>()
+        var mutated = false
         var hydratedCount = 0
         val seenRemoteKeys = mutableSetOf<String>()
 
         for (item in historyItems) {
+            if (!isTraktSessionStillValid(traktGen)) break
             val isMovie = item.type.equals("movie", ignoreCase = true)
             val movie = item.movie
             val show = item.show
@@ -1154,8 +1692,10 @@ class MediaSyncManager private constructor(
             remoteCompletedMediaIds.add(baseId)
             rawImdb?.let { remoteCompletedMediaIds.add(it) }
 
-            val uniqueHistKey = if (!isMovie && episode != null) {
-                "${baseId}_s${episode.season}_e${episode.number}"
+            val seasonNum = if (!isMovie) episode?.season else null
+            val epNum = if (!isMovie) episode?.number else null
+            val uniqueHistKey = if (!isMovie && seasonNum != null && epNum != null) {
+                "${baseId}_s${seasonNum}_e${epNum}"
             } else {
                 baseId
             }
@@ -1175,122 +1715,199 @@ class MediaSyncManager private constructor(
 
             val mediaId = hydrated.mediaId
             remoteCompletedMediaIds.add(mediaId)
-
-            // Mark completed in watchlist if present
-            if (watchlistDao.countWatchlist(mediaId, profileId) > 0) {
-                watchlistDao.updateStatus(mediaId, "COMPLETED", profileId)
+            if (!isMovie && seasonNum != null && epNum != null) {
+                remoteCompletedEpisodeKeys.add("${mediaId}_s${seasonNum}_e${epNum}")
+                remoteCompletedEpisodeKeys.add("${baseId}_s${seasonNum}_e${epNum}")
+                rawImdb?.let { remoteCompletedEpisodeKeys.add("${it}_s${seasonNum}_e${epNum}") }
             }
 
-            // Ensure completed entry exists in playback_history so History & Completed filters work after reset
-            val seasonNum = if (!isMovie) episode?.season else null
-            val epNum = if (!isMovie) episode?.number else null
-            val existingHist = allLocalHistory.firstOrNull {
-                (it.mediaId == mediaId || it.mediaId == baseId) &&
+            val activeWl = localWatchlistMap[mediaId]?.takeIf { !it.isDeleted }
+                ?: localWatchlistMap[baseId]?.takeIf { !it.isDeleted }
+            if (activeWl != null) {
+                if (isMovie && !activeWl.status.equals("COMPLETED", ignoreCase = true)) {
+                    watchlistDao.updateStatus(activeWl.mediaId, "COMPLETED", profileId)
+                    mutated = true
+                } else if (!isMovie && activeWl.status.equals("TO_BE_WATCHED", ignoreCase = true)) {
+                    watchlistDao.updateStatus(activeWl.mediaId, "WATCHING", profileId)
+                    mutated = true
+                }
+            }
+
+            val matchingRows = allLocalHistory.filter {
+                (it.mediaId == mediaId || it.mediaId == baseId || it.mediaId == rawImdb) &&
                     it.seasonNumber == seasonNum && it.episodeNumber == epNum
             }
+            val watchedEpoch = parseIsoTimestamp(item.watched_at)
 
-            // Never insert new ghost history rows with null posters if unhydrated
-            val resolvedPoster = existingHist?.posterUrl?.takeIf { it.isNotBlank() } ?: hydrated.posterUrl
-            val resolvedBackdrop = existingHist?.backdropUrl?.takeIf { it.isNotBlank() } ?: hydrated.backdropUrl ?: resolvedPoster
-            if (existingHist == null && resolvedPoster.isNullOrBlank()) continue
-
-            if (existingHist == null || !existingHist.isCompleted || existingHist.posterUrl.isNullOrBlank()) {
-                val watchedEpoch = parseIsoTimestamp(item.watched_at) ?: System.currentTimeMillis()
-                val durationMs = existingHist?.durationMs?.takeIf { it > 60_000L }
-                    ?: hydrated.durationMs?.takeIf { it > 60_000L }
-                    ?: if (isMovie) 6_000_000L else 2_700_000L
-                val provider = existingHist?.provider ?: "tmdb"
-                val entityId = existingHist?.id ?: PlaybackHistoryEntity.buildId(provider, mediaId, seasonNum, epNum, profileId)
-
-                playbackHistoryDao.upsert(
-                    PlaybackHistoryEntity(
-                        id = entityId,
-                        mediaId = existingHist?.mediaId ?: mediaId,
-                        title = hydrated.title.ifBlank { title },
-                        episodeTitle = episode?.title ?: existingHist?.episodeTitle,
-                        seasonNumber = seasonNum,
-                        episodeNumber = epNum,
-                        posterUrl = resolvedPoster,
-                        backdropUrl = resolvedBackdrop,
-                        currentPositionMs = durationMs,
-                        durationMs = durationMs,
-                        lastWatchedTimestamp = existingHist?.lastWatchedTimestamp ?: watchedEpoch,
-                        isCompleted = true,
-                        provider = provider,
-                        mediaType = if (isMovie) "MOVIE" else "TV_SERIES",
-                        episodeData = existingHist?.episodeData,
-                        isDismissedFromContinueWatching = true,
-                        profileId = profileId
-                    )
+            when (
+                TrackerReconciliationPolicy.decidePlaybackPull(
+                    localRowsForMedia = matchingRows,
+                    remoteEventTsMs = watchedEpoch,
+                    remoteIsCompleted = true,
+                    isSyntheticPlaceholder = false
                 )
+            ) {
+                TrackerReconciliationPolicy.PlaybackPullAction.SKIP_LOCAL_DELETED_OR_DISMISSED -> Unit
+                TrackerReconciliationPolicy.PlaybackPullAction.SKIP_LOCAL_NEWER_OR_COMPLETED -> {
+                    if (!hydrated.posterUrl.isNullOrBlank()) {
+                        for (row in matchingRows.filterNot { it.isDeleted }) {
+                            if (row.posterUrl.isNullOrBlank() || row.backdropUrl.isNullOrBlank()) {
+                                playbackHistoryDao.backfillArtwork(
+                                    id = row.id,
+                                    posterUrl = hydrated.posterUrl,
+                                    backdropUrl = hydrated.backdropUrl ?: hydrated.posterUrl
+                                )
+                            }
+                        }
+                    }
+                }
+                TrackerReconciliationPolicy.PlaybackPullAction.APPLY_REMOTE -> {
+                    val existingHist = matchingRows.firstOrNull { !it.isDeleted } ?: matchingRows.firstOrNull()
+                    val resolvedPoster = existingHist?.posterUrl?.takeIf { it.isNotBlank() } ?: hydrated.posterUrl
+                    val resolvedBackdrop = existingHist?.backdropUrl?.takeIf { it.isNotBlank() }
+                        ?: hydrated.backdropUrl ?: resolvedPoster
+                    if (existingHist != null || !resolvedPoster.isNullOrBlank()) {
+                        val effectiveWatched = watchedEpoch ?: System.currentTimeMillis()
+                        val durationMs = existingHist?.durationMs?.takeIf { it > 60_000L }
+                            ?: hydrated.durationMs?.takeIf { it > 60_000L }
+                            ?: if (isMovie) 6_000_000L else 2_700_000L
+                        val provider = existingHist?.provider ?: "tmdb"
+                        val entityId = existingHist?.id ?: PlaybackHistoryEntity.buildId(provider, mediaId, seasonNum, epNum, profileId)
+                        val now = System.currentTimeMillis()
+                        val ts = maxOf(now, maxOf(existingHist?.clientUpdatedAtMs ?: 0L, effectiveWatched) + 1L)
+
+                        playbackHistoryDao.upsert(
+                            PlaybackHistoryEntity(
+                                id = entityId,
+                                mediaId = existingHist?.mediaId ?: mediaId,
+                                title = hydrated.title.ifBlank { title },
+                                episodeTitle = episode?.title ?: existingHist?.episodeTitle,
+                                seasonNumber = seasonNum,
+                                episodeNumber = epNum,
+                                posterUrl = resolvedPoster,
+                                backdropUrl = resolvedBackdrop,
+                                currentPositionMs = durationMs,
+                                durationMs = durationMs,
+                                lastWatchedTimestamp = maxOf(existingHist?.lastWatchedTimestamp ?: 0L, effectiveWatched),
+                                isCompleted = true,
+                                provider = provider,
+                                mediaType = if (isMovie) "MOVIE" else "TV_SERIES",
+                                episodeData = existingHist?.episodeData,
+                                isDismissedFromContinueWatching = true,
+                                profileId = profileId,
+                                isDirty = true,
+                                isDeleted = false,
+                                clientUpdatedAtMs = ts
+                            )
+                        )
+                        mutated = true
+                    }
+                }
             }
         }
 
-        // 2. Local -> Remote: Push locally completed items to Trakt History
         val unsyncedMovies = mutableListOf<TraktMovie>()
-        val unsyncedShows = mutableListOf<TraktShow>()
-        val pushedLocalIds = mutableSetOf<String>()
+        val pushedMovieKeys = mutableSetOf<String>()
+        val episodeBuckets = linkedMapOf<String, Pair<TraktShow, MutableMap<Int, MutableSet<Int>>>>()
+        val wholeShowTargets = mutableListOf<TraktHistoryShow>()
 
-        val completedLocalHistory = allLocalHistory.filter { it.isCompleted }
-        for (local in completedLocalHistory) {
-            if (local.mediaId in remoteCompletedMediaIds || !pushedLocalIds.add(local.mediaId)) continue
+        for (local in allLocalHistory.filter { !it.isDeleted && it.isCompleted }) {
             val isTv = local.seasonNumber != null || local.episodeNumber != null ||
-                local.mediaType?.contains("TV", ignoreCase = true) == true ||
-                local.mediaType?.contains("ANIME", ignoreCase = true) == true
+                TrackerReconciliationPolicy.isTvMediaType(local.mediaType)
             val tmdbId = local.mediaId.toLongOrNull()
             val imdbId = local.mediaId.takeIf { it.startsWith("tt") }
             val ids = TraktIds(tmdb = tmdbId, imdb = imdbId)
-            if (isTv) {
-                unsyncedShows.add(TraktShow(title = local.title, ids = ids))
-            } else {
-                unsyncedMovies.add(TraktMovie(title = local.title, ids = ids))
+
+            if (isTv && local.seasonNumber != null && local.episodeNumber != null) {
+                val epKey = "${local.mediaId}_s${local.seasonNumber}_e${local.episodeNumber}"
+                if (epKey in remoteCompletedEpisodeKeys) continue
+                val showKey = tmdbId?.toString() ?: imdbId ?: local.title.trim().lowercase()
+                val bucket = episodeBuckets.getOrPut(showKey) {
+                    TraktShow(title = local.title, ids = ids) to linkedMapOf()
+                }
+                bucket.second.getOrPut(local.seasonNumber) { linkedSetOf() }.add(local.episodeNumber)
+            } else if (!isTv) {
+                if (local.mediaId !in remoteCompletedMediaIds && pushedMovieKeys.add(local.mediaId)) {
+                    unsyncedMovies.add(TraktMovie(title = local.title, ids = ids))
+                }
             }
         }
 
-        val completedWatchlist = localWatchlist.filter { it.status.equals("COMPLETED", ignoreCase = true) }
+        val completedWatchlist = allLocalWatchlist.filter {
+            !it.isDeleted && it.status.equals("COMPLETED", ignoreCase = true)
+        }
         for (local in completedWatchlist) {
-            if (local.mediaId in remoteCompletedMediaIds || !pushedLocalIds.add(local.mediaId)) continue
             val isMovie = local.mediaType.equals("MOVIE", ignoreCase = true)
             val tmdbId = local.mediaId.toLongOrNull()
             val imdbId = local.mediaId.takeIf { it.startsWith("tt") }
             val ids = TraktIds(tmdb = tmdbId, imdb = imdbId)
             if (isMovie) {
-                unsyncedMovies.add(TraktMovie(title = local.title, year = local.year, ids = ids))
+                if (local.mediaId !in remoteCompletedMediaIds && pushedMovieKeys.add(local.mediaId)) {
+                    unsyncedMovies.add(TraktMovie(title = local.title, year = local.year, ids = ids))
+                }
             } else {
-                unsyncedShows.add(TraktShow(title = local.title, year = local.year, ids = ids))
+                val showKey = tmdbId?.toString() ?: imdbId ?: local.title.trim().lowercase()
+                if (local.mediaId !in remoteCompletedMediaIds && !episodeBuckets.containsKey(showKey)) {
+                    wholeShowTargets.add(TraktHistoryShow(title = local.title, year = local.year, ids = ids, seasons = null))
+                }
             }
         }
 
-        if (unsyncedMovies.isNotEmpty() || unsyncedShows.isNotEmpty()) {
-            traktClient.addToHistory(token, TraktSyncItemsPayload(movies = unsyncedMovies, shows = unsyncedShows))
+        val historyShows = episodeBuckets.values.map { (show, seasonMap) ->
+            TraktHistoryShow(
+                title = show.title,
+                year = show.year,
+                ids = show.ids,
+                seasons = seasonMap.entries.map { (sNum, epNums) ->
+                    TraktSyncSeason(
+                        number = sNum,
+                        episodes = epNums.sorted().map { TraktSyncEpisode(number = it) }
+                    )
+                }
+            )
+        } + wholeShowTargets
+
+        if ((unsyncedMovies.isNotEmpty() || historyShows.isNotEmpty()) && isTraktSessionStillValid(traktGen)) {
+            val (nextTok, _) = withTraktTokenRetry(activeToken) { t ->
+                traktClient.addHistoryItems(t, TraktHistoryPayload(movies = unsyncedMovies, shows = historyShows))
+            }
+            activeToken = nextTok
         }
-        return null
+        return SubSyncOutcome(didMutateLocal = mutated, activeToken = activeToken)
     }
 
     /* -------------------------------------------------------------------------- */
     /*                     SIMKL WATCH HISTORY (TWO-WAY COMPLETED)                 */
     /* -------------------------------------------------------------------------- */
 
-    private suspend fun syncSimklHistoryInternal(token: String): String? {
-        val profileId = currentProfileId()
+    private suspend fun syncSimklHistoryInternal(
+        token: String,
+        profileId: String,
+        simklGen: Long
+    ): SubSyncOutcome {
         val result = simklClient.getAllItems(token, "completed")
         if (result.isFailure) {
             val msg = result.exceptionOrNull()?.message ?: "Failed to fetch Simkl history"
             Log.w(TAG, msg)
-            return msg
+            return SubSyncOutcome(error = msg)
         }
+        if (!isSimklSessionStillValid(simklGen)) return SubSyncOutcome()
 
-        val parsed = result.getOrNull() ?: return null
-        val allLocalHistory = playbackHistoryDao.getAllHistory().filter { it.profileId == profileId }
-        val localWatchlist = watchlistDao.getAllWatchlist().filter { it.profileId == profileId }
+        val parsed = result.getOrNull() ?: return SubSyncOutcome()
+        val allLocalHistory = playbackHistoryDao.getAllHistoryIncludingDeleted(profileId)
+        val allLocalWatchlist = watchlistDao.getAllWatchlistIncludingDeleted(profileId)
+        val localWatchlistMap = allLocalWatchlist.associateBy { it.mediaId }
+
         val remoteCompletedIds = mutableSetOf<String>()
-
+        var mutated = false
         var hydratedCount = 0
 
         for (m in parsed.movies) {
+            if (!isSimklSessionStillValid(simklGen)) break
             val movie = m.movie ?: continue
             val baseId = movie.ids?.tmdb?.toString() ?: movie.ids?.imdb ?: continue
             remoteCompletedIds.add(baseId)
+            movie.ids?.imdb?.let { remoteCompletedIds.add(it) }
 
             val shouldHydrate = hydratedCount < 80
             val hydrated = hydrateMediaMeta(
@@ -1305,45 +1922,89 @@ class MediaSyncManager private constructor(
             if (shouldHydrate) hydratedCount++
             remoteCompletedIds.add(hydrated.mediaId)
 
-            if (watchlistDao.countWatchlist(hydrated.mediaId, profileId) > 0) {
-                watchlistDao.updateStatus(hydrated.mediaId, "COMPLETED", profileId)
+            val activeWl = localWatchlistMap[hydrated.mediaId]?.takeIf { !it.isDeleted }
+                ?: localWatchlistMap[baseId]?.takeIf { !it.isDeleted }
+            if (activeWl != null && !activeWl.status.equals("COMPLETED", ignoreCase = true)) {
+                watchlistDao.updateStatus(activeWl.mediaId, "COMPLETED", profileId)
+                mutated = true
             }
 
-            val existingHist = allLocalHistory.firstOrNull { it.mediaId == hydrated.mediaId || it.mediaId == baseId }
-            val resolvedPoster = existingHist?.posterUrl?.takeIf { it.isNotBlank() } ?: hydrated.posterUrl
-            val resolvedBackdrop = existingHist?.backdropUrl?.takeIf { it.isNotBlank() } ?: hydrated.backdropUrl ?: resolvedPoster
-            if (existingHist == null && resolvedPoster.isNullOrBlank()) continue
+            val matchingRows = allLocalHistory.filter {
+                it.mediaId == hydrated.mediaId || it.mediaId == baseId || it.mediaId == movie.ids?.imdb
+            }
+            val watchedEpoch = parseIsoTimestamp(m.last_watched_at)
 
-            if (existingHist == null || !existingHist.isCompleted || existingHist.posterUrl.isNullOrBlank()) {
-                val durationMs = existingHist?.durationMs?.takeIf { it > 60_000L } ?: hydrated.durationMs ?: 6_000_000L
-                val entityId = existingHist?.id ?: PlaybackHistoryEntity.buildId("tmdb", hydrated.mediaId, null, null, profileId)
-                playbackHistoryDao.upsert(
-                    PlaybackHistoryEntity(
-                        id = entityId,
-                        mediaId = hydrated.mediaId,
-                        title = hydrated.title,
-                        episodeTitle = null,
-                        seasonNumber = null,
-                        episodeNumber = null,
-                        posterUrl = resolvedPoster,
-                        backdropUrl = resolvedBackdrop,
-                        currentPositionMs = durationMs,
-                        durationMs = durationMs,
-                        lastWatchedTimestamp = existingHist?.lastWatchedTimestamp ?: System.currentTimeMillis(),
-                        isCompleted = true,
-                        provider = existingHist?.provider ?: "tmdb",
-                        mediaType = "MOVIE",
-                        isDismissedFromContinueWatching = true,
-                        profileId = profileId
-                    )
+            when (
+                TrackerReconciliationPolicy.decidePlaybackPull(
+                    localRowsForMedia = matchingRows,
+                    remoteEventTsMs = watchedEpoch,
+                    remoteIsCompleted = true,
+                    isSyntheticPlaceholder = false
                 )
+            ) {
+                TrackerReconciliationPolicy.PlaybackPullAction.SKIP_LOCAL_DELETED_OR_DISMISSED -> Unit
+                TrackerReconciliationPolicy.PlaybackPullAction.SKIP_LOCAL_NEWER_OR_COMPLETED -> {
+                    if (!hydrated.posterUrl.isNullOrBlank()) {
+                        for (row in matchingRows.filterNot { it.isDeleted }) {
+                            if (row.posterUrl.isNullOrBlank() || row.backdropUrl.isNullOrBlank()) {
+                                playbackHistoryDao.backfillArtwork(
+                                    id = row.id,
+                                    posterUrl = hydrated.posterUrl,
+                                    backdropUrl = hydrated.backdropUrl ?: hydrated.posterUrl
+                                )
+                            }
+                        }
+                    }
+                }
+                TrackerReconciliationPolicy.PlaybackPullAction.APPLY_REMOTE -> {
+                    val existingHist = matchingRows.firstOrNull { !it.isDeleted } ?: matchingRows.firstOrNull()
+                    val resolvedPoster = existingHist?.posterUrl?.takeIf { it.isNotBlank() } ?: hydrated.posterUrl
+                    val resolvedBackdrop = existingHist?.backdropUrl?.takeIf { it.isNotBlank() }
+                        ?: hydrated.backdropUrl ?: resolvedPoster
+                    if (existingHist != null || !resolvedPoster.isNullOrBlank()) {
+                        val effectiveWatched = watchedEpoch ?: System.currentTimeMillis()
+                        val durationMs = existingHist?.durationMs?.takeIf { it > 60_000L } ?: hydrated.durationMs ?: 6_000_000L
+                        val entityId = existingHist?.id ?: PlaybackHistoryEntity.buildId("tmdb", hydrated.mediaId, null, null, profileId)
+                        val now = System.currentTimeMillis()
+                        val ts = maxOf(now, maxOf(existingHist?.clientUpdatedAtMs ?: 0L, effectiveWatched) + 1L)
+
+                        playbackHistoryDao.upsert(
+                            PlaybackHistoryEntity(
+                                id = entityId,
+                                mediaId = existingHist?.mediaId ?: hydrated.mediaId,
+                                title = hydrated.title,
+                                episodeTitle = null,
+                                seasonNumber = null,
+                                episodeNumber = null,
+                                posterUrl = resolvedPoster,
+                                backdropUrl = resolvedBackdrop,
+                                currentPositionMs = durationMs,
+                                durationMs = durationMs,
+                                lastWatchedTimestamp = maxOf(existingHist?.lastWatchedTimestamp ?: 0L, effectiveWatched),
+                                isCompleted = true,
+                                provider = existingHist?.provider ?: "tmdb",
+                                mediaType = "MOVIE",
+                                isDismissedFromContinueWatching = true,
+                                profileId = profileId,
+                                isDirty = true,
+                                isDeleted = false,
+                                clientUpdatedAtMs = ts
+                            )
+                        )
+                        mutated = true
+                    }
+                }
             }
         }
 
-        val allShows = parsed.shows.mapNotNull { it.show } + parsed.anime.mapNotNull { it.anime }
-        for (show in allShows) {
+        val allShowEntries = parsed.shows.mapNotNull { e -> e.show?.let { it to e.last_watched_at } } +
+            parsed.anime.mapNotNull { e -> e.anime?.let { it to e.last_watched_at } }
+
+        for ((show, lastWatchedStr) in allShowEntries) {
+            if (!isSimklSessionStillValid(simklGen)) break
             val baseId = show.ids?.tmdb?.toString() ?: show.ids?.imdb ?: continue
             remoteCompletedIds.add(baseId)
+            show.ids?.imdb?.let { remoteCompletedIds.add(it) }
 
             val shouldHydrate = hydratedCount < 80
             val hydrated = hydrateMediaMeta(
@@ -1358,90 +2019,183 @@ class MediaSyncManager private constructor(
             if (shouldHydrate) hydratedCount++
             remoteCompletedIds.add(hydrated.mediaId)
 
-            if (watchlistDao.countWatchlist(hydrated.mediaId, profileId) > 0) {
-                watchlistDao.updateStatus(hydrated.mediaId, "COMPLETED", profileId)
+            val activeWl = localWatchlistMap[hydrated.mediaId]?.takeIf { !it.isDeleted }
+                ?: localWatchlistMap[baseId]?.takeIf { !it.isDeleted }
+            if (activeWl != null && !activeWl.status.equals("COMPLETED", ignoreCase = true)) {
+                watchlistDao.updateStatus(activeWl.mediaId, "COMPLETED", profileId)
+                mutated = true
             }
 
-            val existingHist = allLocalHistory.firstOrNull { it.mediaId == hydrated.mediaId || it.mediaId == baseId }
-            val resolvedPoster = existingHist?.posterUrl?.takeIf { it.isNotBlank() } ?: hydrated.posterUrl
-            val resolvedBackdrop = existingHist?.backdropUrl?.takeIf { it.isNotBlank() } ?: hydrated.backdropUrl ?: resolvedPoster
-            if (existingHist == null && resolvedPoster.isNullOrBlank()) continue
+            val matchingRows = allLocalHistory.filter {
+                it.mediaId == hydrated.mediaId || it.mediaId == baseId || it.mediaId == show.ids?.imdb
+            }
+            val watchedEpoch = parseIsoTimestamp(lastWatchedStr)
 
-            if (existingHist == null || !existingHist.isCompleted || existingHist.posterUrl.isNullOrBlank()) {
-                val durationMs = existingHist?.durationMs?.takeIf { it > 60_000L } ?: hydrated.durationMs ?: 2_700_000L
-                val entityId = existingHist?.id ?: PlaybackHistoryEntity.buildId("tmdb", hydrated.mediaId, 1, 1, profileId)
-                playbackHistoryDao.upsert(
-                    PlaybackHistoryEntity(
-                        id = entityId,
-                        mediaId = hydrated.mediaId,
-                        title = hydrated.title,
-                        episodeTitle = existingHist?.episodeTitle,
-                        seasonNumber = existingHist?.seasonNumber ?: 1,
-                        episodeNumber = existingHist?.episodeNumber ?: 1,
-                        posterUrl = resolvedPoster,
-                        backdropUrl = resolvedBackdrop,
-                        currentPositionMs = durationMs,
-                        durationMs = durationMs,
-                        lastWatchedTimestamp = existingHist?.lastWatchedTimestamp ?: System.currentTimeMillis(),
-                        isCompleted = true,
-                        provider = existingHist?.provider ?: "tmdb",
-                        mediaType = "TV_SERIES",
-                        isDismissedFromContinueWatching = true,
-                        profileId = profileId
-                    )
+            when (
+                TrackerReconciliationPolicy.decidePlaybackPull(
+                    localRowsForMedia = matchingRows,
+                    remoteEventTsMs = watchedEpoch,
+                    remoteIsCompleted = true,
+                    isSyntheticPlaceholder = false
                 )
+            ) {
+                TrackerReconciliationPolicy.PlaybackPullAction.SKIP_LOCAL_DELETED_OR_DISMISSED -> Unit
+                TrackerReconciliationPolicy.PlaybackPullAction.SKIP_LOCAL_NEWER_OR_COMPLETED -> {
+                    if (!hydrated.posterUrl.isNullOrBlank()) {
+                        for (row in matchingRows.filterNot { it.isDeleted }) {
+                            if (row.posterUrl.isNullOrBlank() || row.backdropUrl.isNullOrBlank()) {
+                                playbackHistoryDao.backfillArtwork(
+                                    id = row.id,
+                                    posterUrl = hydrated.posterUrl,
+                                    backdropUrl = hydrated.backdropUrl ?: hydrated.posterUrl
+                                )
+                            }
+                        }
+                    }
+                }
+                TrackerReconciliationPolicy.PlaybackPullAction.APPLY_REMOTE -> {
+                    val existingHist = matchingRows.firstOrNull { !it.isDeleted } ?: matchingRows.firstOrNull()
+                    val resolvedPoster = existingHist?.posterUrl?.takeIf { it.isNotBlank() } ?: hydrated.posterUrl
+                    val resolvedBackdrop = existingHist?.backdropUrl?.takeIf { it.isNotBlank() }
+                        ?: hydrated.backdropUrl ?: resolvedPoster
+                    if (existingHist != null || !resolvedPoster.isNullOrBlank()) {
+                        val effectiveWatched = watchedEpoch ?: System.currentTimeMillis()
+                        val durationMs = existingHist?.durationMs?.takeIf { it > 60_000L } ?: hydrated.durationMs ?: 2_700_000L
+                        val entityId = existingHist?.id ?: PlaybackHistoryEntity.buildId("tmdb", hydrated.mediaId, 1, 1, profileId)
+                        val now = System.currentTimeMillis()
+                        val ts = maxOf(now, maxOf(existingHist?.clientUpdatedAtMs ?: 0L, effectiveWatched) + 1L)
+
+                        playbackHistoryDao.upsert(
+                            PlaybackHistoryEntity(
+                                id = entityId,
+                                mediaId = existingHist?.mediaId ?: hydrated.mediaId,
+                                title = hydrated.title,
+                                episodeTitle = existingHist?.episodeTitle,
+                                seasonNumber = existingHist?.seasonNumber ?: 1,
+                                episodeNumber = existingHist?.episodeNumber ?: 1,
+                                posterUrl = resolvedPoster,
+                                backdropUrl = resolvedBackdrop,
+                                currentPositionMs = durationMs,
+                                durationMs = durationMs,
+                                lastWatchedTimestamp = maxOf(existingHist?.lastWatchedTimestamp ?: 0L, effectiveWatched),
+                                isCompleted = true,
+                                provider = existingHist?.provider ?: "tmdb",
+                                mediaType = "TV_SERIES",
+                                isDismissedFromContinueWatching = true,
+                                profileId = profileId,
+                                isDirty = true,
+                                isDeleted = false,
+                                clientUpdatedAtMs = ts
+                            )
+                        )
+                        mutated = true
+                    }
+                }
             }
         }
 
-        // 2. Local -> Remote: Push locally completed items to Simkl
+        // Local -> Remote: Episode-granular history via /sync/history for TV episodes,
+        // whole-show completion ONLY when Watchlist explicitly has status == COMPLETED.
         val pushMovies = mutableListOf<SimklSyncItem>()
-        val pushShows = mutableListOf<SimklSyncItem>()
-        val pushedIds = mutableSetOf<String>()
+        val pushedMovieIds = mutableSetOf<String>()
+        val episodeBuckets = linkedMapOf<String, Pair<Pair<String, SimklIds>, MutableMap<Int, MutableSet<Int>>>>()
+        val wholeCompletedShows = mutableListOf<SimklSyncItem>()
 
-        for (local in allLocalHistory.filter { it.isCompleted }) {
-            if (local.mediaId in remoteCompletedIds || !pushedIds.add(local.mediaId)) continue
+        for (local in allLocalHistory.filter { !it.isDeleted && it.isCompleted }) {
             val isTv = local.seasonNumber != null || local.episodeNumber != null ||
-                local.mediaType?.contains("TV", ignoreCase = true) == true ||
-                local.mediaType?.contains("ANIME", ignoreCase = true) == true
+                TrackerReconciliationPolicy.isTvMediaType(local.mediaType)
             val ids = SimklIds(tmdb = local.mediaId.toLongOrNull(), imdb = local.mediaId.takeIf { it.startsWith("tt") })
-            val syncItem = SimklSyncItem(title = local.title, to = "completed", ids = ids)
-            if (isTv) pushShows.add(syncItem) else pushMovies.add(syncItem)
+            if (isTv && local.seasonNumber != null && local.episodeNumber != null) {
+                if (local.mediaId in remoteCompletedIds) continue
+                val key = local.mediaId
+                val bucket = episodeBuckets.getOrPut(key) {
+                    (local.title to ids) to linkedMapOf()
+                }
+                bucket.second.getOrPut(local.seasonNumber) { linkedSetOf() }.add(local.episodeNumber)
+            } else if (!isTv && local.mediaId !in remoteCompletedIds && pushedMovieIds.add(local.mediaId)) {
+                pushMovies.add(SimklSyncItem(title = local.title, to = "completed", ids = ids))
+            }
         }
 
-        for (local in localWatchlist.filter { it.status.equals("COMPLETED", ignoreCase = true) }) {
-            if (local.mediaId in remoteCompletedIds || !pushedIds.add(local.mediaId)) continue
+        for (local in allLocalWatchlist.filter { !it.isDeleted && it.status.equals("COMPLETED", ignoreCase = true) }) {
+            if (local.mediaId in remoteCompletedIds) continue
             val isMovie = local.mediaType.equals("MOVIE", ignoreCase = true)
             val ids = SimklIds(tmdb = local.mediaId.toLongOrNull(), imdb = local.mediaId.takeIf { it.startsWith("tt") })
-            val syncItem = SimklSyncItem(title = local.title, to = "completed", ids = ids)
-            if (isMovie) pushMovies.add(syncItem) else pushShows.add(syncItem)
+            if (isMovie) {
+                if (pushedMovieIds.add(local.mediaId)) {
+                    pushMovies.add(SimklSyncItem(title = local.title, to = "completed", ids = ids))
+                }
+            } else {
+                wholeCompletedShows.add(SimklSyncItem(title = local.title, to = "completed", ids = ids))
+            }
         }
 
-        if (pushMovies.isNotEmpty() || pushShows.isNotEmpty()) {
-            simklClient.addToLibrary(token, SimklSyncPayload(movies = pushMovies.take(50), shows = pushShows.take(50)))
+        val episodeShows = episodeBuckets.values.map { (meta, seasonMap) ->
+            SimklHistoryShow(
+                title = meta.first,
+                ids = meta.second,
+                seasons = seasonMap.entries.map { (sNum, eps) ->
+                    SimklHistorySeason(
+                        number = sNum,
+                        episodes = eps.sorted().map { SimklHistoryEpisode(number = it) }
+                    )
+                }
+            )
         }
-        return null
+
+        if (isSimklSessionStillValid(simklGen)) {
+            for (chunk in episodeShows.chunked(25)) {
+                simklClient.addHistoryItems(token, SimklHistoryPayload(shows = chunk))
+            }
+            val maxLibraryBatches = maxOf((pushMovies.size + 49) / 50, (wholeCompletedShows.size + 49) / 50)
+            for (i in 0 until maxLibraryBatches) {
+                val mSlice = pushMovies.drop(i * 50).take(50)
+                val sSlice = wholeCompletedShows.drop(i * 50).take(50)
+                if (mSlice.isNotEmpty() || sSlice.isNotEmpty()) {
+                    simklClient.addToLibrary(token, SimklSyncPayload(movies = mSlice, shows = sSlice))
+                }
+            }
+        }
+        return SubSyncOutcome(didMutateLocal = mutated)
     }
 
     /* -------------------------------------------------------------------------- */
     /*                  TRAKT CUSTOM LISTS & PLAYLISTS (TWO-WAY)                   */
     /* -------------------------------------------------------------------------- */
 
-    private suspend fun syncTraktListsInternal(token: String): String? {
-        val profileId = currentProfileId()
-        val localPlaylists = playlistRepository.awaitLoaded()
-        val listsResult = traktClient.getUserLists(token)
+    private suspend fun syncTraktListsInternal(
+        token: String,
+        profileId: String,
+        traktGen: Long
+    ): SubSyncOutcome {
+        playlistRepository.awaitLoaded()
+        val allLocalIncludingDeleted = playlistRepository.getAllPlaylistsIncludingDeleted()
+        val deletedTitles = allLocalIncludingDeleted
+            .filter { it.isDeleted }
+            .map { it.title.trim().lowercase() }
+            .toSet()
+
+        val (activeToken1, listsResult) = withTraktTokenRetry(token) { t -> traktClient.getUserLists(t) }
+        var activeToken = activeToken1
         if (listsResult.isFailure) {
             val msg = listsResult.exceptionOrNull()?.message ?: "Failed to fetch Trakt custom lists"
             Log.w(TAG, msg)
-            return msg
+            return SubSyncOutcome(error = msg, activeToken = activeToken)
         }
+        if (!isTraktSessionStillValid(traktGen)) return SubSyncOutcome(activeToken = activeToken)
 
+        var mutated = false
         val remoteLists = (listsResult.getOrNull() ?: emptyList()).toMutableList()
 
-        // 1. Remote -> Local: Pull Trakt custom lists into PlaylistRepository with TMDB hydration
         for (list in remoteLists) {
+            if (!isTraktSessionStillValid(traktGen)) break
             if (list.ids.slug.isBlank()) continue
-            val itemsResult = traktClient.getListItems(token, list.ids.slug)
+            if (list.name.trim().lowercase() in deletedTitles) continue
+
+            val (nextTok, itemsResult) = withTraktTokenRetry(activeToken) { t ->
+                traktClient.getListItems(t, list.ids.slug)
+            }
+            activeToken = nextTok
             if (itemsResult.isFailure) continue
 
             val items = itemsResult.getOrNull() ?: emptyList()
@@ -1476,14 +2230,16 @@ class MediaSyncManager private constructor(
             }
 
             if (playlistItems.isNotEmpty()) {
-                // If this is the "Favorites" list on Trakt, restore favoriteMediaIds as well
                 if (list.name.equals("Favorites", ignoreCase = true)) {
                     val currentFavs = preferencesRepository.favoriteMediaIds.first()
                     for (pi in playlistItems) {
                         if (pi.mediaId !in currentFavs) {
                             preferencesRepository.toggleFavorite(pi.mediaId)
+                            mutated = true
                         }
-                        if (watchlistDao.countWatchlist(pi.mediaId, profileId) == 0) {
+                        val rawWatchlist = watchlistDao.getRawItem(pi.mediaId, profileId)
+                        if (rawWatchlist == null) {
+                            val now = System.currentTimeMillis()
                             watchlistDao.insert(
                                 WatchlistEntity(
                                     mediaId = pi.mediaId,
@@ -1494,29 +2250,36 @@ class MediaSyncManager private constructor(
                                     mediaType = if (pi.isTvSeries) "TV_SERIES" else "MOVIE",
                                     rating = null,
                                     year = pi.year,
-                                    status = "TO_BE_WATCHED"
+                                    status = "TO_BE_WATCHED",
+                                    isDirty = true,
+                                    isDeleted = false,
+                                    clientUpdatedAtMs = now
                                 )
                             )
+                            mutated = true
                         }
                     }
                 }
 
                 val currentPlaylists = playlistRepository.userPlaylists.value
-                val existing = currentPlaylists.find { it.title.equals(list.name, ignoreCase = true) }
+                val existing = currentPlaylists.find { !it.isDeleted && it.title.equals(list.name, ignoreCase = true) }
                 if (existing == null) {
                     playlistRepository.createPlaylist(list.name, playlistItems, syncToRemote = false)
+                    mutated = true
                 } else {
+                    val existingKeys = existing.items.map { it.uniqueKey }.toSet()
                     for (pi in playlistItems) {
-                        playlistRepository.addItemToPlaylist(existing.id, pi, syncToRemote = false)
+                        if (pi.uniqueKey !in existingKeys) {
+                            playlistRepository.addItemToPlaylist(existing.id, pi, syncToRemote = false)
+                            mutated = true
+                        }
                     }
                 }
             }
         }
 
-        // 2. Local -> Remote: Push local custom playlists (and Favorites) to Trakt custom lists!
-        val updatedLocalPlaylists = playlistRepository.userPlaylists.value.toMutableList()
+        val updatedLocalPlaylists = playlistRepository.getUserPlaylists().toMutableList()
 
-        // Also build a virtual playlist for Favorites if the user has local favorites
         val favoriteIds = preferencesRepository.favoriteMediaIds.first()
         if (favoriteIds.isNotEmpty() && updatedLocalPlaylists.none { it.title.equals("Favorites", ignoreCase = true) }) {
             val localWatchlist = watchlistDao.getAllWatchlist().filter { it.profileId == profileId }
@@ -1532,7 +2295,7 @@ class MediaSyncManager private constructor(
             }
             if (favPlaylistItems.isNotEmpty()) {
                 updatedLocalPlaylists.add(
-                    com.netvio.data.repository.Playlist(
+                    Playlist(
                         id = "virtual_favorites",
                         title = "Favorites",
                         items = favPlaylistItems
@@ -1542,18 +2305,23 @@ class MediaSyncManager private constructor(
         }
 
         for (localPl in updatedLocalPlaylists) {
-            if (localPl.items.isEmpty() || localPl.isSystem) continue
+            if (!isTraktSessionStillValid(traktGen)) break
+            if (localPl.items.isEmpty() || localPl.isSystem || localPl.isDeleted) continue
 
             var remoteList = remoteLists.find { it.name.equals(localPl.title, ignoreCase = true) }
             if (remoteList == null) {
-                remoteList = createTraktUserList(token, localPl.title)
+                remoteList = createTraktUserList(activeToken, localPl.title)
                 if (remoteList != null) {
                     remoteLists.add(remoteList)
                 }
             }
 
             val slug = remoteList?.ids?.slug?.takeIf { it.isNotBlank() } ?: continue
-            val existingRemoteItems = traktClient.getListItems(token, slug).getOrNull() ?: emptyList()
+            val (tok2, existingRemoteRes) = withTraktTokenRetry(activeToken) { t ->
+                traktClient.getListItems(t, slug)
+            }
+            activeToken = tok2
+            val existingRemoteItems = existingRemoteRes.getOrNull() ?: emptyList()
             val remoteTmdbIds = existingRemoteItems.mapNotNull { it.movie?.ids?.tmdb ?: it.show?.ids?.tmdb }.map { it.toString() }.toSet()
             val remoteImdbIds = existingRemoteItems.mapNotNull { it.movie?.ids?.imdb ?: it.show?.ids?.imdb }.toSet()
 
@@ -1576,20 +2344,17 @@ class MediaSyncManager private constructor(
                 }
             }
 
-            if (moviesToPush.isNotEmpty() || showsToPush.isNotEmpty()) {
+            if ((moviesToPush.isNotEmpty() || showsToPush.isNotEmpty()) && isTraktSessionStillValid(traktGen)) {
                 addItemsToTraktUserList(
-                    token = token,
+                    token = activeToken,
                     listSlug = slug,
                     payload = TraktSyncItemsPayload(movies = moviesToPush, shows = showsToPush)
                 )
             }
         }
-        return null
+        return SubSyncOutcome(didMutateLocal = mutated, activeToken = activeToken)
     }
 
-    /**
-     * Creates a new personal custom list on Trakt.tv (`POST /users/me/lists`).
-     */
     private suspend fun createTraktUserList(token: String, name: String): TraktCustomList? = withContext(Dispatchers.IO) {
         try {
             val bodyJson = JSONObject().apply {
@@ -1624,9 +2389,6 @@ class MediaSyncManager private constructor(
         }
     }
 
-    /**
-     * Adds movies/shows to a Trakt custom list (`POST /users/me/lists/{id}/items`).
-     */
     private suspend fun addItemsToTraktUserList(
         token: String,
         listSlug: String,
@@ -1664,18 +2426,25 @@ class MediaSyncManager private constructor(
     /*                         REAL-TIME EVENT DISPATCH HOOKS                     */
     /* -------------------------------------------------------------------------- */
 
-    /**
-     * Dispatches an asynchronous push when custom playlists are created or updated locally.
-     */
     fun notifyPlaylistsChanged() {
         scope.launch {
+            if (!isTrackerSyncAllowed()) return@launch
             try {
-                val traktToken = preferencesRepository.traktAccessToken.first()
-                val traktListsEnabled = preferencesRepository.traktSyncLists.first()
-                if (traktToken.isNotBlank() && traktListsEnabled) {
-                    val validToken = ensureValidTraktToken(traktToken)
-                    if (validToken.isNotBlank()) {
-                        syncTraktListsInternal(validToken)
+                if (syncMutex.isLocked) {
+                    enqueuePendingTarget(TrackerSyncTarget.TRAKT)
+                    return@launch
+                }
+                syncMutex.withLock {
+                    val traktGen = traktAuthGeneration.get()
+                    val traktToken = preferencesRepository.traktAccessToken.first()
+                    val traktListsEnabled = preferencesRepository.traktSyncLists.first()
+                    if (traktToken.isNotBlank() && traktListsEnabled && isTraktSessionStillValid(traktGen)) {
+                        val didMutate = SyncCoordinator.dataMutex.withLock {
+                            syncTraktListsInternal(traktToken, currentProfileId(), traktGen).didMutateLocal
+                        }
+                        if (didMutate) {
+                            SupabaseSyncManager.getInstance(context).scheduleSync(1500L)
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -1684,28 +2453,27 @@ class MediaSyncManager private constructor(
         }
     }
 
-    /**
-     * Dispatches an asynchronous push when an item is added to the watchlist locally.
-     */
     fun notifyWatchlistAdded(item: MediaItem) {
         scope.launch {
+            if (!isTrackerSyncAllowed()) return@launch
             try {
-                val isTv = item.type.name.contains("TV", ignoreCase = true) || item.type.name.contains("ANIME", ignoreCase = true)
+                val isTv = item.type.name.contains("TV", ignoreCase = true) ||
+                    item.type.name.contains("ANIME", ignoreCase = true)
                 val cleanId = item.id.trim().removePrefix("tmdb:").removePrefix("tmdb/")
                 val tmdbId = cleanId.toLongOrNull()
                 val imdbId = if (cleanId.startsWith("tt")) cleanId else null
 
+                val traktGen = traktAuthGeneration.get()
                 val traktToken = preferencesRepository.traktAccessToken.first()
                 val traktEnabled = preferencesRepository.traktSyncWatchlist.first()
-                if (traktToken.isNotBlank() && traktEnabled) {
-                    val validToken = ensureValidTraktToken(traktToken)
+                if (traktToken.isNotBlank() && traktEnabled && isTraktSessionStillValid(traktGen)) {
                     val ids = TraktIds(tmdb = tmdbId, imdb = imdbId)
                     val payload = if (isTv) {
                         TraktSyncItemsPayload(shows = listOf(TraktShow(title = item.title, year = item.year, ids = ids)))
                     } else {
                         TraktSyncItemsPayload(movies = listOf(TraktMovie(title = item.title, year = item.year, ids = ids)))
                     }
-                    traktClient.addToWatchlist(validToken, payload)
+                    withTraktTokenRetry(traktToken) { t -> traktClient.addToWatchlist(t, payload) }
                 }
 
                 val simklToken = preferencesRepository.simklAccessToken.first()
@@ -1725,28 +2493,27 @@ class MediaSyncManager private constructor(
         }
     }
 
-    /**
-     * Dispatches an asynchronous push when a MediaDetail item is added to the watchlist.
-     */
     fun notifyWatchlistAdded(detail: MediaDetail) {
         scope.launch {
+            if (!isTrackerSyncAllowed()) return@launch
             try {
-                val isTv = detail.type.name.contains("TV", ignoreCase = true) || detail.type.name.contains("ANIME", ignoreCase = true)
+                val isTv = detail.type.name.contains("TV", ignoreCase = true) ||
+                    detail.type.name.contains("ANIME", ignoreCase = true)
                 val cleanId = detail.id.trim().removePrefix("tmdb:").removePrefix("tmdb/")
                 val tmdbId = cleanId.toLongOrNull()
                 val imdbId = detail.imdbId ?: if (cleanId.startsWith("tt")) cleanId else null
 
+                val traktGen = traktAuthGeneration.get()
                 val traktToken = preferencesRepository.traktAccessToken.first()
                 val traktEnabled = preferencesRepository.traktSyncWatchlist.first()
-                if (traktToken.isNotBlank() && traktEnabled) {
-                    val validToken = ensureValidTraktToken(traktToken)
+                if (traktToken.isNotBlank() && traktEnabled && isTraktSessionStillValid(traktGen)) {
                     val ids = TraktIds(tmdb = tmdbId, imdb = imdbId)
                     val payload = if (isTv) {
                         TraktSyncItemsPayload(shows = listOf(TraktShow(title = detail.title, year = detail.year, ids = ids)))
                     } else {
                         TraktSyncItemsPayload(movies = listOf(TraktMovie(title = detail.title, year = detail.year, ids = ids)))
                     }
-                    traktClient.addToWatchlist(validToken, payload)
+                    withTraktTokenRetry(traktToken) { t -> traktClient.addToWatchlist(t, payload) }
                 }
 
                 val simklToken = preferencesRepository.simklAccessToken.first()
@@ -1766,39 +2533,51 @@ class MediaSyncManager private constructor(
         }
     }
 
-    /**
-     * Dispatches an asynchronous remove from Trakt & Simkl when un-bookmarked.
-     */
     fun notifyWatchlistRemoved(mediaId: String, title: String? = null, isTv: Boolean = false) {
-        scope.launch {
-            try {
-                val cleanId = mediaId.trim().removePrefix("tmdb:").removePrefix("tmdb/")
-                val tmdbId = cleanId.toLongOrNull()
-                val imdbId = if (cleanId.startsWith("tt")) cleanId else null
+        notifyWatchlistRemovedBatch(listOf(Triple(mediaId, title, isTv)))
+    }
 
+    fun notifyWatchlistRemovedBatch(items: List<Triple<String, String?, Boolean>>) {
+        if (items.isEmpty()) return
+        scope.launch {
+            if (!isTrackerSyncAllowed()) return@launch
+            try {
+                val traktMovies = mutableListOf<TraktMovie>()
+                val traktShows = mutableListOf<TraktShow>()
+                val simklMovies = mutableListOf<SimklSyncItem>()
+                val simklShows = mutableListOf<SimklSyncItem>()
+
+                for ((mediaId, title, isTv) in items) {
+                    val cleanId = mediaId.trim().removePrefix("tmdb:").removePrefix("tmdb/")
+                    val tmdbId = cleanId.toLongOrNull()
+                    val imdbId = if (cleanId.startsWith("tt")) cleanId else null
+
+                    val traktIds = TraktIds(tmdb = tmdbId, imdb = imdbId)
+                    if (isTv) {
+                        traktShows.add(TraktShow(title = title ?: "", ids = traktIds))
+                    } else {
+                        traktMovies.add(TraktMovie(title = title ?: "", ids = traktIds))
+                    }
+
+                    val simklItem = SimklSyncItem(title = title, ids = SimklIds(tmdb = tmdbId, imdb = imdbId))
+                    if (isTv) simklShows.add(simklItem) else simklMovies.add(simklItem)
+                }
+
+                val traktGen = traktAuthGeneration.get()
                 val traktToken = preferencesRepository.traktAccessToken.first()
                 val traktEnabled = preferencesRepository.traktSyncWatchlist.first()
-                if (traktToken.isNotBlank() && traktEnabled) {
-                    val validToken = ensureValidTraktToken(traktToken)
-                    val ids = TraktIds(tmdb = tmdbId, imdb = imdbId)
-                    val payload = if (isTv) {
-                        TraktSyncItemsPayload(shows = listOf(TraktShow(title = title ?: "", ids = ids)))
-                    } else {
-                        TraktSyncItemsPayload(movies = listOf(TraktMovie(title = title ?: "", ids = ids)))
-                    }
-                    traktClient.removeFromWatchlist(validToken, payload)
+                if (traktToken.isNotBlank() && traktEnabled && isTraktSessionStillValid(traktGen)) {
+                    val payload = TraktSyncItemsPayload(movies = traktMovies, shows = traktShows)
+                    withTraktTokenRetry(traktToken) { t -> traktClient.removeFromWatchlist(t, payload) }
                 }
 
                 val simklToken = preferencesRepository.simklAccessToken.first()
                 val simklEnabled = preferencesRepository.simklSyncWatchlist.first()
                 if (simklToken.isNotBlank() && simklEnabled) {
-                    val item = SimklSyncItem(title = title, ids = SimklIds(tmdb = tmdbId, imdb = imdbId))
-                    val payload = if (isTv) {
-                        SimklSyncPayload(shows = listOf(item))
-                    } else {
-                        SimklSyncPayload(movies = listOf(item))
-                    }
-                    simklClient.removeFromLibrary(simklToken, payload)
+                    simklClient.removeFromLibrary(
+                        simklToken,
+                        SimklSyncPayload(movies = simklMovies, shows = simklShows)
+                    )
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed async watchlist remove", e)
@@ -1806,49 +2585,68 @@ class MediaSyncManager private constructor(
         }
     }
 
-    /**
-     * Dispatches an asynchronous push when media playback is completed.
-     */
-    fun notifyMediaCompleted(mediaId: String, title: String, isTv: Boolean, season: Int? = null, episode: Int? = null) {
+    fun notifyMediaCompleted(
+        mediaId: String,
+        title: String,
+        isTv: Boolean,
+        season: Int? = null,
+        episode: Int? = null
+    ) {
         scope.launch {
+            if (!isTrackerSyncAllowed()) return@launch
             try {
                 val cleanId = mediaId.trim().removePrefix("tmdb:").removePrefix("tmdb/")
                 val tmdbId = cleanId.toLongOrNull()
                 val imdbId = if (cleanId.startsWith("tt")) cleanId else null
 
+                val traktGen = traktAuthGeneration.get()
                 val traktToken = preferencesRepository.traktAccessToken.first()
                 val traktEnabled = preferencesRepository.traktSyncHistory.first()
-                if (traktToken.isNotBlank() && traktEnabled) {
-                    val validToken = ensureValidTraktToken(traktToken)
+                if (traktToken.isNotBlank() && traktEnabled && isTraktSessionStillValid(traktGen)) {
                     val ids = TraktIds(tmdb = tmdbId, imdb = imdbId)
                     val payload = if (isTv) {
-                        TraktSyncItemsPayload(shows = listOf(TraktShow(title = title, ids = ids)))
+                        val seasons = if (season != null && episode != null) {
+                            listOf(TraktSyncSeason(number = season, episodes = listOf(TraktSyncEpisode(number = episode))))
+                        } else null
+                        TraktHistoryPayload(shows = listOf(TraktHistoryShow(title = title, ids = ids, seasons = seasons)))
                     } else {
-                        TraktSyncItemsPayload(movies = listOf(TraktMovie(title = title, ids = ids)))
+                        TraktHistoryPayload(movies = listOf(TraktMovie(title = title, ids = ids)))
                     }
-                    traktClient.addToHistory(validToken, payload)
+                    withTraktTokenRetry(traktToken) { t -> traktClient.addHistoryItems(t, payload) }
                 }
 
                 val simklToken = preferencesRepository.simklAccessToken.first()
                 val simklEnabled = preferencesRepository.simklSyncHistory.first()
                 if (simklToken.isNotBlank() && simklEnabled) {
                     val ids = SimklIds(tmdb = tmdbId, imdb = imdbId)
-                    val syncItem = SimklSyncItem(title = title, to = "completed", ids = ids)
-                    val payload = if (isTv) {
-                        SimklSyncPayload(shows = listOf(syncItem))
-                    } else {
-                        SimklSyncPayload(movies = listOf(syncItem))
-                    }
-                    simklClient.addToLibrary(simklToken, payload)
-                    if (season != null && episode != null) {
-                        simklClient.scrobble(
-                            simklToken,
-                            SimklScrobblePayload(
-                                show = SimklScrobbleItem(title = title, ids = ids),
-                                episode = SimklEpisodeItem(season = season, number = episode),
-                                progress = 100f
+                    if (isTv && season != null && episode != null) {
+                        val historyPayload = SimklHistoryPayload(
+                            shows = listOf(
+                                SimklHistoryShow(
+                                    title = title,
+                                    ids = ids,
+                                    seasons = listOf(
+                                        SimklHistorySeason(
+                                            number = season,
+                                            episodes = listOf(SimklHistoryEpisode(number = episode))
+                                        )
+                                    )
+                                )
                             )
                         )
+                        simklClient.addHistoryItems(simklToken, historyPayload)
+                        simklClient.addToLibrary(
+                            simklToken,
+                            SimklSyncPayload(shows = listOf(SimklSyncItem(title = title, to = "watching", ids = ids)))
+                        )
+                    } else {
+                        val syncItem = SimklSyncItem(title = title, to = "completed", ids = ids)
+                        val listPayload = if (isTv) {
+                            SimklSyncPayload(shows = listOf(syncItem))
+                        } else {
+                            SimklSyncPayload(movies = listOf(syncItem))
+                        }
+                        simklClient.addToLibrary(simklToken, listPayload)
                     }
                 }
             } catch (e: Exception) {

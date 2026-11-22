@@ -121,6 +121,8 @@ class PreferencesRepository private constructor(private val context: Context) {
         val SIMKL_SYNC_WATCHLIST = booleanPreferencesKey("simkl_sync_watchlist")
         val SIMKL_SYNC_HISTORY = booleanPreferencesKey("simkl_sync_history")
         val LAST_MEDIA_SYNC_TIMESTAMP = longPreferencesKey("last_media_sync_timestamp")
+        val TRAKT_LAST_SYNC_TIMESTAMP = longPreferencesKey("trakt_last_sync_timestamp")
+        val SIMKL_LAST_SYNC_TIMESTAMP = longPreferencesKey("simkl_last_sync_timestamp")
         val REAL_DEBRID_API_KEY = stringPreferencesKey("real_debrid_api_key")
         val ALL_DEBRID_API_KEY = stringPreferencesKey("all_debrid_api_key")
         val TORBOX_API_KEY = stringPreferencesKey("torbox_api_key")
@@ -172,6 +174,15 @@ class PreferencesRepository private constructor(private val context: Context) {
         val SUPABASE_HASH_SETTINGS = stringPreferencesKey("supabase_hash_settings")
         val SUPABASE_HASH_ADDONS = stringPreferencesKey("supabase_hash_addons")
         val SUPABASE_HASH_PLAYLISTS = stringPreferencesKey("supabase_hash_playlists")
+
+        // 1.7 Stream Source Policy & Smart Cache Management
+        val P2P_STREAMS_ENABLED = booleanPreferencesKey("p2p_streams_enabled")
+        val AUTO_CACHE_CLEANUP_ENABLED = booleanPreferencesKey("auto_cache_cleanup_enabled")
+        val MAX_CACHE_LIMIT_MB = intPreferencesKey("max_cache_limit_mb")
+        val CACHE_RETENTION_DAYS = intPreferencesKey("cache_retention_days")
+        val AUTO_CLEAR_P2P_ON_EXIT = booleanPreferencesKey("auto_clear_p2p_on_exit")
+        val LAST_CACHE_CLEANUP_TIMESTAMP = longPreferencesKey("last_cache_cleanup_timestamp")
+        val LAST_CACHE_RECLAIMED_BYTES = longPreferencesKey("last_cache_reclaimed_bytes")
     }
     val dohProvider: Flow<String> = context.preferencesDataStore.data
         .catch { exception ->
@@ -185,6 +196,110 @@ class PreferencesRepository private constructor(private val context: Context) {
     suspend fun setDohProvider(provider: String) {
         context.preferencesDataStore.edit { preferences ->
             preferences[PreferencesKeys.DOH_PROVIDER] = provider
+        }
+    }
+
+    val p2pStreamsEnabled: Flow<Boolean> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.P2P_STREAMS_ENABLED] ?: true
+        }
+        .distinctUntilChanged()
+
+    suspend fun setP2pStreamsEnabled(enabled: Boolean) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.P2P_STREAMS_ENABLED] = enabled
+        }
+    }
+
+    val autoCacheCleanupEnabled: Flow<Boolean> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.AUTO_CACHE_CLEANUP_ENABLED] ?: true
+        }
+        .distinctUntilChanged()
+
+    suspend fun setAutoCacheCleanupEnabled(enabled: Boolean) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.AUTO_CACHE_CLEANUP_ENABLED] = enabled
+        }
+    }
+
+    val maxCacheLimitMb: Flow<Int> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            (preferences[PreferencesKeys.MAX_CACHE_LIMIT_MB] ?: 500).coerceIn(250, 2048)
+        }
+        .distinctUntilChanged()
+
+    suspend fun setMaxCacheLimitMb(limitMb: Int) {
+        val clamped = limitMb.coerceIn(250, 2048)
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.MAX_CACHE_LIMIT_MB] = clamped
+        }
+    }
+
+    val cacheRetentionDays: Flow<Int> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            (preferences[PreferencesKeys.CACHE_RETENTION_DAYS] ?: 7).coerceIn(1, 90)
+        }
+        .distinctUntilChanged()
+
+    suspend fun setCacheRetentionDays(days: Int) {
+        val clamped = days.coerceIn(1, 90)
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.CACHE_RETENTION_DAYS] = clamped
+        }
+    }
+
+    val autoClearP2pOnExit: Flow<Boolean> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.AUTO_CLEAR_P2P_ON_EXIT] ?: true
+        }
+        .distinctUntilChanged()
+
+    suspend fun setAutoClearP2pOnExit(enabled: Boolean) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.AUTO_CLEAR_P2P_ON_EXIT] = enabled
+        }
+    }
+
+    val lastCacheCleanupTimestamp: Flow<Long> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.LAST_CACHE_CLEANUP_TIMESTAMP] ?: 0L
+        }
+        .distinctUntilChanged()
+
+    val lastCacheReclaimedBytes: Flow<Long> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.LAST_CACHE_RECLAIMED_BYTES] ?: 0L
+        }
+        .distinctUntilChanged()
+
+    suspend fun recordCacheCleanupResult(timestampMs: Long, reclaimedBytes: Long) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.LAST_CACHE_CLEANUP_TIMESTAMP] = timestampMs
+            if (reclaimedBytes >= 0L) {
+                preferences[PreferencesKeys.LAST_CACHE_RECLAIMED_BYTES] = reclaimedBytes
+            }
         }
     }
 
@@ -512,6 +627,7 @@ class PreferencesRepository private constructor(private val context: Context) {
             }
             preferences[PreferencesKeys.DISABLED_PLUGINS] = current
         }
+        runCatching { com.netvio.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync() }
     }
 
     suspend fun setExtraContentEnabled(enabled: Boolean) {
@@ -539,6 +655,7 @@ class PreferencesRepository private constructor(private val context: Context) {
             prefs.remove(PreferencesKeys.TRAKT_ACCESS_TOKEN)
             prefs.remove(PreferencesKeys.TRAKT_REFRESH_TOKEN)
             prefs.remove(PreferencesKeys.TRAKT_USERNAME)
+            prefs[PreferencesKeys.TRAKT_LAST_SYNC_TIMESTAMP] = 0L
         }
     }
 
@@ -566,7 +683,10 @@ class PreferencesRepository private constructor(private val context: Context) {
     }
 
     suspend fun clearSimklAuth() {
-        context.preferencesDataStore.edit { it.remove(PreferencesKeys.SIMKL_ACCESS_TOKEN) }
+        context.preferencesDataStore.edit { prefs ->
+            prefs.remove(PreferencesKeys.SIMKL_ACCESS_TOKEN)
+            prefs[PreferencesKeys.SIMKL_LAST_SYNC_TIMESTAMP] = 0L
+        }
     }
 
     suspend fun setSimklScrobbleEnabled(enabled: Boolean) {
@@ -638,6 +758,22 @@ class PreferencesRepository private constructor(private val context: Context) {
 
     suspend fun setLastMediaSyncTimestamp(timestamp: Long) {
         context.preferencesDataStore.edit { it[PreferencesKeys.LAST_MEDIA_SYNC_TIMESTAMP] = timestamp }
+    }
+
+    val traktLastSyncTimestamp: Flow<Long> = context.preferencesDataStore.data.map {
+        it[PreferencesKeys.TRAKT_LAST_SYNC_TIMESTAMP] ?: 0L
+    }.distinctUntilChanged()
+
+    suspend fun setTraktLastSyncTimestamp(timestamp: Long) {
+        context.preferencesDataStore.edit { it[PreferencesKeys.TRAKT_LAST_SYNC_TIMESTAMP] = timestamp }
+    }
+
+    val simklLastSyncTimestamp: Flow<Long> = context.preferencesDataStore.data.map {
+        it[PreferencesKeys.SIMKL_LAST_SYNC_TIMESTAMP] ?: 0L
+    }.distinctUntilChanged()
+
+    suspend fun setSimklLastSyncTimestamp(timestamp: Long) {
+        context.preferencesDataStore.edit { it[PreferencesKeys.SIMKL_LAST_SYNC_TIMESTAMP] = timestamp }
     }
 
     // Debrid Preferences
@@ -1336,11 +1472,32 @@ class PreferencesRepository private constructor(private val context: Context) {
         }
         .distinctUntilChanged()
 
-    suspend fun addPendingDeletedAddonUrl(url: String) {
-        if (url.isBlank()) return
+    suspend fun addPendingDeletedAddonUrl(url: String, addonType: String? = null) {
+        val trimmed = url.trim()
+        if (trimmed.isBlank()) return
+        val norm = com.netvio.core.addons.AddonRepository.normalizeAddonUrl(trimmed)
+        val entry = if (!addonType.isNullOrBlank()) "$addonType|$trimmed" else trimmed
         context.preferencesDataStore.edit { preferences ->
             val current = preferences[PreferencesKeys.SUPABASE_PENDING_DELETED_ADDON_URLS] ?: emptySet()
-            preferences[PreferencesKeys.SUPABASE_PENDING_DELETED_ADDON_URLS] = current + url
+            val filtered = current.filterNot { existing ->
+                val rawUrl = existing.substringAfter('|', existing).trim()
+                rawUrl == trimmed || com.netvio.core.addons.AddonRepository.normalizeAddonUrl(rawUrl) == norm
+            }.toSet()
+            preferences[PreferencesKeys.SUPABASE_PENDING_DELETED_ADDON_URLS] = filtered + entry
+        }
+    }
+
+    suspend fun removePendingDeletedAddonUrl(url: String) {
+        val trimmed = url.trim()
+        if (trimmed.isBlank()) return
+        val norm = com.netvio.core.addons.AddonRepository.normalizeAddonUrl(trimmed)
+        context.preferencesDataStore.edit { preferences ->
+            val current = preferences[PreferencesKeys.SUPABASE_PENDING_DELETED_ADDON_URLS] ?: emptySet()
+            val filtered = current.filterNot { existing ->
+                val rawUrl = existing.substringAfter('|', existing).trim()
+                rawUrl == trimmed || com.netvio.core.addons.AddonRepository.normalizeAddonUrl(rawUrl) == norm
+            }.toSet()
+            preferences[PreferencesKeys.SUPABASE_PENDING_DELETED_ADDON_URLS] = filtered
         }
     }
 
@@ -1378,16 +1535,21 @@ class PreferencesRepository private constructor(private val context: Context) {
         prefs[PreferencesKeys.SMART_FAILOVER_ENABLED]?.let { result["smart_failover_enabled"] = it.toString() }
         prefs[PreferencesKeys.AUDIO_PASSTHROUGH_ENABLED]?.let { result["audio_passthrough_enabled"] = it.toString() }
         prefs[PreferencesKeys.WIFI_ONLY_DOWNLOADS]?.let { result["wifi_only_downloads"] = it.toString() }
+        prefs[PreferencesKeys.P2P_STREAMS_ENABLED]?.let { result["p2p_streams_enabled"] = it.toString() }
+        prefs[PreferencesKeys.AUTO_CACHE_CLEANUP_ENABLED]?.let { result["auto_cache_cleanup_enabled"] = it.toString() }
+        prefs[PreferencesKeys.MAX_CACHE_LIMIT_MB]?.let { result["max_cache_limit_mb"] = it.toString() }
+        prefs[PreferencesKeys.CACHE_RETENTION_DAYS]?.let { result["cache_retention_days"] = it.toString() }
+        prefs[PreferencesKeys.AUTO_CLEAR_P2P_ON_EXIT]?.let { result["auto_clear_p2p_on_exit"] = it.toString() }
         prefs[PreferencesKeys.EXTRA_CONTENT_ENABLED]?.let { result["extra_content_enabled"] = it.toString() }
         prefs[PreferencesKeys.REDUCE_MOTION]?.let { result["reduce_motion"] = it.toString() }
-        prefs[PreferencesKeys.FAVORITE_MEDIA_IDS]?.let { if (it.isNotBlank()) result["favorite_media_ids"] = it }
-        prefs[PreferencesKeys.MEDIA_REACTIONS]?.let { if (it.isNotBlank()) result["media_reactions"] = it }
+        result["favorite_media_ids"] = prefs[PreferencesKeys.FAVORITE_MEDIA_IDS] ?: ""
+        result["media_reactions"] = prefs[PreferencesKeys.MEDIA_REACTIONS] ?: ""
         prefs[PreferencesKeys.ACTIVE_PROVIDER]?.let { if (it.isNotBlank()) result["active_provider"] = it }
         prefs[PreferencesKeys.REPOSITORY_URLS]?.let { urls ->
             if (urls.isNotEmpty()) result["repository_urls"] = urls.joinToString(",")
         }
         prefs[PreferencesKeys.DISABLED_PLUGINS]?.let { disabled ->
-            if (disabled.isNotEmpty()) result["disabled_plugins"] = disabled.joinToString(",")
+            if (disabled.isNotEmpty()) result["disabled_plugins"] = disabled.sorted().joinToString(",")
         }
         prefs[PreferencesKeys.CATALOG_PREFERENCES]?.let { raw ->
             if (raw.isNotBlank()) result["catalog_preferences"] = raw
@@ -1395,7 +1557,10 @@ class PreferencesRepository private constructor(private val context: Context) {
         return result
     }
 
-    suspend fun applySyncableSettings(settings: Map<String, String>) {
+    suspend fun applySyncableSettings(
+        settings: Map<String, String>,
+        isInitialRestore: Boolean = false
+    ) {
         context.preferencesDataStore.edit { prefs ->
             settings["card_scale_mode"]?.let { prefs[PreferencesKeys.CARD_SCALE_MODE] = it }
             settings["navbar_style"]?.let { prefs[PreferencesKeys.NAVBAR_STYLE] = it }
@@ -1420,45 +1585,60 @@ class PreferencesRepository private constructor(private val context: Context) {
             settings["smart_failover_enabled"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.SMART_FAILOVER_ENABLED] = it }
             settings["audio_passthrough_enabled"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.AUDIO_PASSTHROUGH_ENABLED] = it }
             settings["wifi_only_downloads"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.WIFI_ONLY_DOWNLOADS] = it }
+            settings["p2p_streams_enabled"]?.toBooleanStrictOrNull()?.let { enabled ->
+                prefs[PreferencesKeys.P2P_STREAMS_ENABLED] = enabled
+                com.netvio.core.p2p.P2pSettingsRepository.ensureLoaded()
+                com.netvio.core.p2p.P2pSettingsRepository.setP2pEnabled(enabled)
+            }
+            settings["auto_cache_cleanup_enabled"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.AUTO_CACHE_CLEANUP_ENABLED] = it }
+            settings["max_cache_limit_mb"]?.toIntOrNull()?.let { prefs[PreferencesKeys.MAX_CACHE_LIMIT_MB] = it.coerceIn(250, 2048) }
+            settings["cache_retention_days"]?.toIntOrNull()?.let { prefs[PreferencesKeys.CACHE_RETENTION_DAYS] = it.coerceIn(1, 90) }
+            settings["auto_clear_p2p_on_exit"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.AUTO_CLEAR_P2P_ON_EXIT] = it }
             settings["extra_content_enabled"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.EXTRA_CONTENT_ENABLED] = it }
             settings["reduce_motion"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.REDUCE_MOTION] = it }
 
-            // Merge favorite_media_ids (union of local + remote so favorites are never lost)
             settings["favorite_media_ids"]?.let { remoteFavsRaw ->
-                val localFavsRaw = prefs[PreferencesKeys.FAVORITE_MEDIA_IDS] ?: ""
-                val mergedFavs = (localFavsRaw.split(",") + remoteFavsRaw.split(","))
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() }
-                    .toSet()
-                if (mergedFavs.isNotEmpty()) {
+                if (isInitialRestore) {
+                    val localFavsRaw = prefs[PreferencesKeys.FAVORITE_MEDIA_IDS] ?: ""
+                    val mergedFavs = (localFavsRaw.split(",") + remoteFavsRaw.split(","))
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .toSet()
                     prefs[PreferencesKeys.FAVORITE_MEDIA_IDS] = mergedFavs.joinToString(",")
+                } else {
+                    prefs[PreferencesKeys.FAVORITE_MEDIA_IDS] = remoteFavsRaw
                 }
             }
 
-            // Merge media_reactions
             settings["media_reactions"]?.let { remoteReactions ->
-                if (remoteReactions.isNotBlank()) {
-                    val localRaw = prefs[PreferencesKeys.MEDIA_REACTIONS] ?: ""
-                    val mergedMap = mutableMapOf<String, String>()
-                    localRaw.split(";").forEach { entry ->
-                        val parts = entry.split("=")
-                        if (parts.size == 2 && parts[0].isNotBlank()) mergedMap[parts[0]] = parts[1]
+                if (isInitialRestore) {
+                    if (remoteReactions.isNotBlank()) {
+                        val localRaw = prefs[PreferencesKeys.MEDIA_REACTIONS] ?: ""
+                        val mergedMap = mutableMapOf<String, String>()
+                        localRaw.split(";").forEach { entry ->
+                            val parts = entry.split("=")
+                            if (parts.size == 2 && parts[0].isNotBlank()) mergedMap[parts[0]] = parts[1]
+                        }
+                        remoteReactions.split(";").forEach { entry ->
+                            val parts = entry.split("=")
+                            if (parts.size == 2 && parts[0].isNotBlank()) mergedMap[parts[0]] = parts[1]
+                        }
+                        prefs[PreferencesKeys.MEDIA_REACTIONS] = mergedMap.entries.joinToString(";") { "${it.key}=${it.value}" }
                     }
-                    remoteReactions.split(";").forEach { entry ->
-                        val parts = entry.split("=")
-                        if (parts.size == 2 && parts[0].isNotBlank()) mergedMap[parts[0]] = parts[1]
-                    }
-                    prefs[PreferencesKeys.MEDIA_REACTIONS] = mergedMap.entries.joinToString(";") { "${it.key}=${it.value}" }
+                } else {
+                    prefs[PreferencesKeys.MEDIA_REACTIONS] = remoteReactions
                 }
             }
 
             settings["active_provider"]?.let { if (it.isNotBlank()) prefs[PreferencesKeys.ACTIVE_PROVIDER] = it }
 
-            settings["repository_urls"]?.let { remoteUrlsCsv ->
-                val remoteUrls = remoteUrlsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-                if (remoteUrls.isNotEmpty()) {
-                    val currentUrls = prefs[PreferencesKeys.REPOSITORY_URLS] ?: emptySet()
-                    prefs[PreferencesKeys.REPOSITORY_URLS] = currentUrls + remoteUrls
+            if (isInitialRestore) {
+                settings["repository_urls"]?.let { remoteUrlsCsv ->
+                    val remoteUrls = remoteUrlsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+                    if (remoteUrls.isNotEmpty()) {
+                        val currentUrls = prefs[PreferencesKeys.REPOSITORY_URLS] ?: emptySet()
+                        prefs[PreferencesKeys.REPOSITORY_URLS] = currentUrls + remoteUrls
+                    }
                 }
             }
 

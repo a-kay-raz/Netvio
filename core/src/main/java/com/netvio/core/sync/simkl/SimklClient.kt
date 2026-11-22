@@ -16,7 +16,10 @@ class SimklClient(
     private val clientId: String = DEFAULT_CLIENT_ID,
     private val httpClient: OkHttpClient = DohDns.createOkHttpClient()
 ) {
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    private val historyJson = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     suspend fun getUserProfile(token: String): Result<SimklUserDetails> = withContext(Dispatchers.IO) {
@@ -45,13 +48,18 @@ class SimklClient(
     }
 
     suspend fun scrobble(
+        action: String,
         token: String,
         payload: SimklScrobblePayload
     ): Result<Boolean> = withContext(Dispatchers.IO) {
         if (token.isBlank()) return@withContext Result.failure(IllegalArgumentException("No token"))
+        val safeAction = when (action.lowercase()) {
+            "start", "pause", "stop" -> action.lowercase()
+            else -> "stop"
+        }
         try {
             val request = Request.Builder()
-                .url("$BASE_URL/sync/history")
+                .url("$BASE_URL/scrobble/$safeAction")
                 .header("Content-Type", "application/json")
                 .header("simkl-api-key", clientId)
                 .header("Authorization", "Bearer $token")
@@ -62,7 +70,40 @@ class SimklClient(
                 if (response.isSuccessful) {
                     Result.success(true)
                 } else {
-                    Result.failure(IOException("Simkl scrobble failed: HTTP ${response.code}"))
+                    Result.failure(IOException("Simkl scrobble $safeAction failed: HTTP ${response.code}"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun scrobble(
+        token: String,
+        payload: SimklScrobblePayload
+    ): Result<Boolean> = scrobble("stop", token, payload)
+
+    /**
+     * Adds movies and episode-granular shows to Simkl watch history.
+     * Endpoint: POST /sync/history
+     */
+    suspend fun addHistoryItems(token: String, payload: SimklHistoryPayload): Result<Boolean> = withContext(Dispatchers.IO) {
+        if (token.isBlank()) return@withContext Result.failure(IllegalArgumentException("No token"))
+        try {
+            val encoded = historyJson.encodeToString(payload)
+            val request = Request.Builder()
+                .url("$BASE_URL/sync/history")
+                .header("Content-Type", "application/json")
+                .header("simkl-api-key", clientId)
+                .header("Authorization", "Bearer $token")
+                .post(encoded.toRequestBody(jsonMediaType))
+                .build()
+
+            httpClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Result.success(true)
+                } else {
+                    Result.failure(IOException("Simkl history update failed: HTTP ${response.code}"))
                 }
             }
         } catch (e: Exception) {

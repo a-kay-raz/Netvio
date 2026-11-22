@@ -141,4 +141,124 @@ class SupabaseSyncOptimizationTest {
         assertEquals(SyncEfficiencyPolicy.hashPlaylists(pl1), SyncEfficiencyPolicy.hashPlaylists(pl2))
         assertNotEquals(SyncEfficiencyPolicy.hashPlaylists(pl1), SyncEfficiencyPolicy.hashPlaylists(plModified))
     }
+
+    @Test
+    fun testPlaybackDeletionAndDismissalProtectedFrom60sPositionResurrection() {
+        // Local dirty deletion must NOT be overwritten by a remote active item within the 60s window
+        assertFalse(
+            SyncEfficiencyPolicy.shouldApplyRemotePlayback(
+                localIsDirty = true,
+                localIsDeleted = true,
+                localIsDismissed = false,
+                localClientUpdatedAtMs = 1_000_000L,
+                localPositionMs = 10_000L,
+                remoteIsDeleted = false,
+                remoteIsDismissed = false,
+                remoteLastWatchedTs = 980_000L,
+                remotePositionMs = 500_000L
+            )
+        )
+
+        // Local dirty dismissal must NOT be overwritten by equal-timestamp active remote row
+        assertFalse(
+            SyncEfficiencyPolicy.shouldApplyRemotePlayback(
+                localIsDirty = true,
+                localIsDeleted = false,
+                localIsDismissed = true,
+                localClientUpdatedAtMs = 1_000_000L,
+                localPositionMs = 10_000L,
+                remoteIsDeleted = false,
+                remoteIsDismissed = false,
+                remoteLastWatchedTs = 1_000_000L,
+                remotePositionMs = 500_000L
+            )
+        )
+
+        // Strictly newer remote active watch (e.g. rewatched on another device) DOES apply
+        assertTrue(
+            SyncEfficiencyPolicy.shouldApplyRemotePlayback(
+                localIsDirty = true,
+                localIsDeleted = true,
+                localIsDismissed = false,
+                localClientUpdatedAtMs = 1_000_000L,
+                localPositionMs = 10_000L,
+                remoteIsDeleted = false,
+                remoteIsDismissed = false,
+                remoteLastWatchedTs = 1_000_001L,
+                remotePositionMs = 5_000L
+            )
+        )
+
+        // Clean local row ALWAYS accepts remote deletion even if remote clock was slightly behind
+        assertTrue(
+            SyncEfficiencyPolicy.shouldApplyRemotePlayback(
+                localIsDirty = false,
+                localIsDeleted = false,
+                localIsDismissed = false,
+                localClientUpdatedAtMs = 2_000_000L,
+                localPositionMs = 500_000L,
+                remoteIsDeleted = true,
+                remoteIsDismissed = false,
+                remoteLastWatchedTs = 1_900_000L,
+                remotePositionMs = 0L
+            )
+        )
+    }
+
+    @Test
+    fun testWatchlistDeletionProtectionAndConflictResolution() {
+        // Local dirty deletion beats older or equal-timestamp active remote row
+        assertFalse(
+            SyncEfficiencyPolicy.shouldApplyRemoteWatchlist(
+                localIsDirty = true,
+                localIsDeleted = true,
+                localClientUpdatedAtMs = 1_000_000L,
+                remoteIsDeleted = false,
+                remoteClientUpdatedAtMs = 1_000_000L
+            )
+        )
+
+        // Strictly newer remote re-add overrides local deletion
+        assertTrue(
+            SyncEfficiencyPolicy.shouldApplyRemoteWatchlist(
+                localIsDirty = true,
+                localIsDeleted = true,
+                localClientUpdatedAtMs = 1_000_000L,
+                remoteIsDeleted = false,
+                remoteClientUpdatedAtMs = 1_000_001L
+            )
+        )
+
+        // Equal-timestamp remote deletion wins over local dirty active row
+        assertTrue(
+            SyncEfficiencyPolicy.shouldApplyRemoteWatchlist(
+                localIsDirty = true,
+                localIsDeleted = false,
+                localClientUpdatedAtMs = 1_000_000L,
+                remoteIsDeleted = true,
+                remoteClientUpdatedAtMs = 1_000_000L
+            )
+        )
+    }
+
+    @Test
+    fun testTypedPendingDeletedAddonParsingPreservesJsRepoManifestUrls() {
+        val jsRepoWithManifestJson = SyncEfficiencyPolicy.parsePendingDeletedAddon(
+            "js_repo|https://example.com/plugins/manifest.json"
+        )
+        assertEquals("js_repo", jsRepoWithManifestJson.first)
+        assertEquals("https://example.com/plugins/manifest.json", jsRepoWithManifestJson.second)
+
+        val stremioAddon = SyncEfficiencyPolicy.parsePendingDeletedAddon(
+            "stremio|https://torrentio.strem.fun/manifest.json"
+        )
+        assertEquals("stremio", stremioAddon.first)
+        assertEquals("https://torrentio.strem.fun/manifest.json", stremioAddon.second)
+
+        val legacyUntypedRepo = SyncEfficiencyPolicy.parsePendingDeletedAddon(
+            "https://example.com/repo.json"
+        )
+        assertEquals("js_repo", legacyUntypedRepo.first)
+        assertEquals("https://example.com/repo.json", legacyUntypedRepo.second)
+    }
 }

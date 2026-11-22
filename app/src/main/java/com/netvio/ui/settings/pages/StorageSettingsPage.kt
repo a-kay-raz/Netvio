@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.netvio.data.backup.BackupSummary
+import com.netvio.data.cache.CacheCategory
 import com.netvio.ui.components.NetvioGlassDialog
 import com.netvio.ui.settings.components.*
 import com.netvio.ui.theme.AppFontFamily
@@ -95,6 +96,14 @@ fun StorageSettingsPage(
     val coroutineScope = rememberCoroutineScope()
 
     val cacheSizeBytes by viewModel.cacheSizeBytes.collectAsState()
+    val cacheBreakdown by viewModel.cacheBreakdown.collectAsState()
+    val clearingCategory by viewModel.clearingCategory.collectAsState()
+    val autoCleanupEnabled by viewModel.autoCleanupEnabled.collectAsState()
+    val maxCacheLimitMb by viewModel.maxCacheLimitMb.collectAsState()
+    val cacheRetentionDays by viewModel.cacheRetentionDays.collectAsState()
+    val autoClearP2pOnExit by viewModel.autoClearP2pOnExit.collectAsState()
+    val lastAutoCleanTimestamp by viewModel.lastAutoCleanTimestamp.collectAsState()
+    val lastAutoCleanReclaimedBytes by viewModel.lastAutoCleanReclaimedBytes.collectAsState()
     val downloadsSizeBytes by viewModel.downloadsSizeBytes.collectAsState()
     val configSizeBytes by viewModel.configSizeBytes.collectAsState()
     val customDownloadDir by viewModel.customDownloadDir.collectAsState()
@@ -461,18 +470,124 @@ fun StorageSettingsPage(
             }
         }
 
-        // Section 1: Cache Maintenance
+        val retentionOptions = remember {
+            listOf(
+                PopoverOption(3, "3 Days", "Aggressive cleanup · Best for tight storage"),
+                PopoverOption(7, "7 Days", "Recommended · Balances speed and space"),
+                PopoverOption(14, "14 Days", "Extended · Keeps recent posters longer"),
+                PopoverOption(30, "30 Days", "Minimal pruning · Keeps cache up to 1 month")
+            )
+        }
+        val cacheLimitOptions = remember { listOf(250, 500, 1024, 2048) }
+
+        // Section 1: Smart Auto-Cleanup & Cache Maintenance
         OpenSettingsSectionHeader(title = "Cache Maintenance")
+
+        OpenSettingsToggleRow(
+            title = "Automatic cache cleanup",
+            subtitle = "Prunes expired video & P2P chunks automatically while keeping posters fast",
+            checked = autoCleanupEnabled,
+            onCheckedChange = { viewModel.setAutoCleanupEnabled(it) },
+            hazeState = hazeState
+        )
+
+        // Max Cache Limit Pill Selector
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .drawBehind {
+                    drawLine(
+                        color = SettingsTokens.HairlineDivider,
+                        start = Offset(0f, size.height),
+                        end = Offset(size.width, size.height),
+                        strokeWidth = SettingsTokens.HairlineWidth.toPx()
+                    )
+                }
+                .padding(vertical = 15.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                    Text(
+                        text = "Max cache limit",
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 15.sp,
+                            lineHeight = 19.sp,
+                            color = if (autoCleanupEnabled) SettingsTokens.TextWhite96 else SettingsTokens.TextWhite42
+                        )
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Evicts oldest P2P & stream chunks first when exceeded",
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Normal,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                            color = SettingsTokens.TextWhite54
+                        )
+                    )
+                }
+
+                SettingsMetadataChip(
+                    text = if (maxCacheLimitMb >= 1024) "${maxCacheLimitMb / 1024} GB" else "$maxCacheLimitMb MB",
+                    hazeState = hazeState
+                )
+            }
+
+            MonochromeSegmentedPillRow(
+                options = cacheLimitOptions,
+                selected = maxCacheLimitMb,
+                onSelected = { viewModel.setMaxCacheLimitMb(it) },
+                hazeState = hazeState,
+                labelProvider = { if (it >= 1024) "${it / 1024}G" else "${it}M" },
+                isAllowed = { autoCleanupEnabled }
+            )
+        }
+
+        OpenSettingsRow(
+            title = "Auto-delete stale cache after",
+            subtitle = if (lastAutoCleanTimestamp > 0L) {
+                val (recNum, recUnit) = formatBytesSplit(lastAutoCleanReclaimedBytes)
+                val dateStr = SimpleDateFormat("MMM d · h:mm a", Locale.getDefault()).format(Date(lastAutoCleanTimestamp))
+                "Last auto-clean: $dateStr ($recNum $recUnit freed)"
+            } else {
+                "Automatically expires unused video & P2P files"
+            },
+            enabled = autoCleanupEnabled,
+            trailingContent = {
+                FrostedGlassDropdown(
+                    options = retentionOptions,
+                    selected = cacheRetentionDays,
+                    onSelected = { if (autoCleanupEnabled) viewModel.setCacheRetentionDays(it) },
+                    hazeState = hazeState,
+                    popoverWidth = 230.dp
+                )
+            }
+        )
+
+        OpenSettingsToggleRow(
+            title = "Auto-clear P2P cache on exit",
+            subtitle = "Frees BitTorrent stream chunks right after leaving playback",
+            checked = autoClearP2pOnExit,
+            onCheckedChange = { viewModel.setAutoClearP2pOnExit(it) },
+            hazeState = hazeState
+        )
 
         val isCacheEmpty = animatedByteSize.value <= 0f && !isDrainAnimating && !isCalculating
         OpenSettingsRow(
-            title = "Clear image & HTTP cache",
-            subtitle = "Frees thumbnail cache and memory buffers",
+            title = "Clear all cache",
+            subtitle = "Frees artwork, video buffers, P2P pieces & HTTP temp files",
             trailingContent = {
                 val pillText = when {
                     isDrainAnimating || isClearing || isCalculating -> ""
                     isCacheEmpty -> "Cleared"
-                    else -> "Clear"
+                    else -> "Clear all"
                 }
 
                 SettingsPillButton(
@@ -488,6 +603,42 @@ fun StorageSettingsPage(
                 )
             }
         )
+
+        // Section 1B: Cache Breakdown by User Category
+        OpenSettingsSectionHeader(title = "Cache Breakdown")
+
+        val categoryEntries = remember {
+            listOf(
+                Triple(CacheCategory.IMAGES, "Images & artwork", "Cached posters, backdrops & logos"),
+                Triple(CacheCategory.VIDEO_BUFFERS, "Video & stream buffers", "Temporary playback & seek segments"),
+                Triple(CacheCategory.P2P_TORRENT, "P2P torrent cache", "Cached BitTorrent piece data"),
+                Triple(CacheCategory.METADATA_AND_TEMP, "Metadata, updates & temp", "TMDB API cache & old APK installers")
+            )
+        }
+        categoryEntries.forEach { (category, label, desc) ->
+            val catBytes = cacheBreakdown.bytesFor(category)
+            val (catNum, catUnit) = formatBytesSplit(catBytes)
+            val isCatClearing = clearingCategory == category
+            val isCatEmpty = catBytes <= 0L && !isCatClearing && !isCalculating
+            OpenSettingsRow(
+                title = label,
+                subtitle = "$desc · $catNum $catUnit",
+                trailingContent = {
+                    SettingsPillButton(
+                        text = if (isCatClearing || isCalculating) "" else if (isCatEmpty) "Empty" else "Clear",
+                        onClick = {
+                            viewModel.clearCacheCategory(category) { reclaimed ->
+                                val (rNum, rUnit) = formatBytesSplit(reclaimed)
+                                Toast.makeText(context, "Cleared $label ($rNum $rUnit)", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        isLoading = isCatClearing || isCalculating,
+                        enabled = !isCatEmpty && !isCatClearing && !isClearing && !isCalculating,
+                        hazeState = hazeState
+                    )
+                }
+            )
+        }
 
         // Section 2: Downloads & Offline Storage
         OpenSettingsSectionHeader(title = "Downloads & Offline Storage")
@@ -596,9 +747,9 @@ fun StorageSettingsPage(
         // Shared Glass Confirmation Dialog for Cache Clear
         if (showClearConfirmation) {
             NetvioGlassDialog(
-                title = "Clear image & HTTP cache?",
-                message = "This will free $currentNumeral $currentUnit of cached thumbnails and memory buffers. Your downloads and settings stay intact.",
-                confirmText = "Clear cache",
+                title = "Clear all cache?",
+                message = "This will free $currentNumeral $currentUnit of cached artwork, video buffers, P2P pieces, and temporary files. Your offline downloads and settings stay intact.",
+                confirmText = "Clear all",
                 dismissText = "Cancel",
                 icon = Icons.Outlined.CleaningServices,
                 onConfirm = { triggerCacheClear() },

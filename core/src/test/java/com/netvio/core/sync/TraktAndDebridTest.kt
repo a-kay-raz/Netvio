@@ -50,9 +50,11 @@ class TraktAndDebridTest {
         assertTrue(authUrl.contains("response_type=code"))
         assertTrue(authUrl.contains("code_challenge_method=S256"))
         assertTrue(authUrl.contains("code_challenge="))
-        assertTrue(authUrl.contains("redirect_uri=http%3A%2F%2Flocalhost"))
+        assertTrue(authUrl.contains("redirect_uri=https%3A%2F%2Fthearcreactorguy.github.io%2FEuthopiar%2Fauth%2Ftrakt%2F"))
         assertNotNull(client.pendingCodeVerifier)
         assertTrue(client.pendingCodeVerifier!!.length >= 32)
+        assertTrue(TraktClient.DEFAULT_CLIENT_ID.isNotBlank())
+        assertTrue(TraktClient.DEFAULT_CLIENT_SECRET.isBlank())
     }
 
     @Test
@@ -127,6 +129,56 @@ class TraktAndDebridTest {
         assertEquals(1, decoded.movies.size)
         assertEquals(1, decoded.shows.size)
         assertEquals(438631L, decoded.movies[0].ids?.tmdb)
+    }
+
+    @Test
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    fun testEpisodeLevelHistoryPayloadsEncodeSeasonsAndOmitNulls() {
+        val omitNullsJson = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
+
+        val traktPayload = TraktHistoryPayload(
+            movies = listOf(TraktMovie(title = "Inception", ids = TraktIds(tmdb = 27205))),
+            shows = listOf(
+                TraktHistoryShow(
+                    title = "Severance",
+                    ids = TraktIds(tmdb = 95396),
+                    seasons = listOf(
+                        TraktSyncSeason(
+                            number = 1,
+                            episodes = listOf(TraktSyncEpisode(number = 4), TraktSyncEpisode(number = 5))
+                        )
+                    )
+                ),
+                TraktHistoryShow(
+                    title = "Dark",
+                    ids = TraktIds(tmdb = 70523),
+                    seasons = null
+                )
+            )
+        )
+        val encodedTrakt = omitNullsJson.encodeToString(traktPayload)
+        assertTrue(encodedTrakt.contains("\"seasons\""))
+        assertTrue(encodedTrakt.contains("\"episodes\""))
+        assertFalse("Null seasons property must be omitted for whole-show entries", encodedTrakt.contains("\"seasons\":null"))
+
+        val simklPayload = SimklHistoryPayload(
+            shows = listOf(
+                SimklHistoryShow(
+                    title = "Severance",
+                    ids = SimklIds(tmdb = 95396),
+                    seasons = listOf(
+                        SimklHistorySeason(
+                            number = 2,
+                            episodes = listOf(SimklHistoryEpisode(number = 1))
+                        )
+                    )
+                )
+            )
+        )
+        val encodedSimkl = omitNullsJson.encodeToString(simklPayload)
+        assertTrue(encodedSimkl.contains("\"seasons\""))
+        assertTrue(encodedSimkl.contains("\"number\":2"))
+        assertTrue(encodedSimkl.contains("\"number\":1"))
     }
 
     @Test

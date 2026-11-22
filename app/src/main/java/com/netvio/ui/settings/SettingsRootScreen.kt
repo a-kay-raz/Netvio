@@ -492,6 +492,18 @@ fun SettingsRootScreen(
                                 )
                             }
                         }
+                        SettingsRowHairline()
+                    }
+
+                    item(key = "row_tv_companion") {
+                        StaggeredEnterRow(index = 4, isAnimated = hasAnimatedEnter, reduceMotion = reduceMotion) {
+                            SettingsHairlineRow(
+                                title = SettingsPage.TvCompanion.title,
+                                subtitle = SettingsPage.TvCompanion.subtitle,
+                                icon = SettingsPage.TvCompanion.icon,
+                                onClick = { onNavigateToPage(SettingsPage.TvCompanion.route) }
+                            )
+                        }
                         Spacer(modifier = Modifier.height(26.dp))
                     }
                 }

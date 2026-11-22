@@ -108,7 +108,10 @@ internal class BatchDownloadCoordinator private constructor(context: Context) {
             var lockedProvider: String? = null
 
             try {
-                P2pStreamingEngine.prewarmEngine(appContext)
+                val p2pEnabled = com.netvio.core.p2p.P2pSettingsRepository.isP2pEnabled()
+                if (p2pEnabled) {
+                    P2pStreamingEngine.prewarmEngine(appContext)
+                }
 
                 val debrid = resolveEffectiveDebridCredentials(
                     debridEnabled = prefsRepository.debridEnabled.first(),
@@ -174,8 +177,15 @@ internal class BatchDownloadCoordinator private constructor(context: Context) {
                         delay(1_000L)
                     }
 
+                    val filteredForPolicy = availableStreams.filter {
+                        com.netvio.core.p2p.P2pStreamPolicy.shouldIncludeStream(
+                            isTorrentStream = it.isTorrentStream,
+                            p2pEnabled = p2pEnabled,
+                            hasActiveDebrid = debrid.enabled
+                        )
+                    }
                     val chosenStream = BatchEpisodeDownloadPlanner.selectBestBatchDownloadStream(
-                        streams = availableStreams,
+                        streams = filteredForPolicy,
                         preferredQuality = preferredQuality,
                         preferredProvider = lockedProvider,
                         preferSameProvider = preferSameProvider
@@ -195,7 +205,8 @@ internal class BatchDownloadCoordinator private constructor(context: Context) {
                         detail = detail,
                         episode = ep,
                         stream = chosenStream,
-                        debrid = debrid
+                        debrid = debrid,
+                        allowP2pFallback = p2pEnabled
                     )
                     when (outcome.preflight) {
                         is StoragePreflightResult.Sufficient -> enqueuedCount++

@@ -10,10 +10,9 @@
 
 <br/>
 
-[![Latest Release](https://img.shields.io/badge/Release-v1.2.0--Stable-E50914?style=for-the-badge&logo=github&logoColor=white)](https://github.com/a-kay-raz/Netvio/releases/latest)
+[![Latest Release](https://img.shields.io/badge/Release-v1.3.0--Stable-E50914?style=for-the-badge&logo=github&logoColor=white)](https://github.com/a-kay-raz/Netvio/releases/latest)
 [![Platform](https://img.shields.io/badge/Android-Available-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/a-kay-raz/Netvio/releases/latest)
-[![Android TV](https://img.shields.io/badge/Android%20TV-Coming%20Soon-F5A623?style=for-the-badge&logo=android&logoColor=white)](#-roadmap)
-[![Kotlin](https://img.shields.io/badge/Kotlin-100%25-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
+[![Android TV](https://img.shields.io/badge/Android%20TV-Coming%20Soon-F5A623?style=for-the-badge&logo=android&logoColor=white)](#-roadmap)[![Kotlin](https://img.shields.io/badge/Kotlin-100%25-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![Open Source](https://img.shields.io/badge/Open%20Source-Yes-brightgreen?style=for-the-badge&logo=opensourceinitiative&logoColor=white)](https://github.com/a-kay-raz/Netvio)
 
 <br/>
@@ -162,8 +161,7 @@ flowchart LR
 
 <div align="center">
 
-[![Download Latest](https://img.shields.io/badge/⬇%20%20GET%20v1.2.0--Stable-E50914?style=for-the-badge)](https://github.com/a-kay-raz/Netvio/releases/latest)
-
+[![Download Latest](https://img.shields.io/badge/⬇%20%20GET%20v1.3.0--Stable-E50914?style=for-the-badge)](https://github.com/a-kay-raz/Netvio/releases/latest)
 </div>
 
 <br/>
@@ -174,7 +172,6 @@ flowchart LR
 |---|---|
 | 📱 **Android Smartphone App** | ✅ **Available now**, [Download](https://github.com/a-kay-raz/Netvio/releases/latest) |
 | 📺 **Android TV App** | 🚧 **Coming soon**, stay tuned! |
-
 <br/>
 
 ## 🛠️ Build From Source
@@ -216,7 +213,9 @@ cd Netvio
 - [x] 🎨 High-craft Lucide vector design system & Material You monochrome icon
 - [x] 🔑 One-tap Google Cloud Account & real-time cross-device sync
 - [x] 📐 Dynamic 3-tier card scaling & inline IMDb rating badges
-- [ ] 📺 **Android TV app**
+- [x] 📺 **Android TV app** — Released! ([TheARCreactorGUY/EuthopiarTV](https://github.com/TheARCreactorGUY/EuthopiarTV))
+- [x] 📲 **Mobile ↔ Android TV Companion** (Smart Hybrid Handoff, Live D-Pad Remote, Phone Keyboard & Config Push)
+- [x] 🧹 **Smart Auto-Cache Engine & P2P Stream Control**
 - [ ] 🎨 More themes & customization
 - [ ] 💡 Your idea here, [open an issue](https://github.com/a-kay-raz/Netvio/issues)!
 
@@ -243,11 +242,11 @@ Netvio works with Nuvio-compatible plugins. Add the manifest link in **Settings 
 </details>
 
 <details>
-<summary><b>Is there an iOS or desktop version?</b></summary>
+<summary><b>Is there an Android TV, iOS or desktop version?</b></summary>
 
 <br/>
 
-Not right now. Android is live, and **Android TV** is next on the list.
+**Android** and **[Android TV](https://github.com/TheARCreactorGUY/EuthopiarTV)** are both live! Desktop and iOS are on the roadmap.
 
 </details>
 

@@ -29,11 +29,31 @@ interface WatchlistDao {
     @Query("SELECT * FROM watchlist WHERE profileId = :profileId AND mediaId = :mediaId LIMIT 1")
     suspend fun getRawItem(mediaId: String, profileId: String = "default_user"): WatchlistEntity?
 
-    @Query("UPDATE watchlist SET status = :status, isDirty = 1, clientUpdatedAtMs = :now WHERE profileId = :profileId AND mediaId = :mediaId")
+    @Query("UPDATE watchlist SET status = :status, isDirty = 1, clientUpdatedAtMs = MAX(:now, clientUpdatedAtMs + 1) WHERE profileId = :profileId AND mediaId = :mediaId")
     suspend fun updateStatus(mediaId: String, status: String, profileId: String = "default_user", now: Long = System.currentTimeMillis())
 
     @Query("SELECT * FROM watchlist WHERE isDeleted = 0 ORDER BY addedTimestamp DESC")
     suspend fun getAllWatchlist(): List<WatchlistEntity>
+
+    @Query("SELECT * FROM watchlist WHERE profileId = :profileId ORDER BY addedTimestamp DESC")
+    suspend fun getAllWatchlistIncludingDeleted(profileId: String = "default_user"): List<WatchlistEntity>
+
+    @Query("""
+        UPDATE watchlist
+        SET posterUrl = CASE WHEN posterUrl IS NULL OR posterUrl = '' THEN :posterUrl ELSE posterUrl END,
+            backdropUrl = CASE WHEN backdropUrl IS NULL OR backdropUrl = '' THEN :backdropUrl ELSE backdropUrl END,
+            rating = COALESCE(rating, :rating),
+            year = COALESCE(year, :year)
+        WHERE profileId = :profileId AND mediaId = :mediaId AND isDeleted = 0
+    """)
+    suspend fun backfillArtwork(
+        mediaId: String,
+        profileId: String,
+        posterUrl: String?,
+        backdropUrl: String?,
+        rating: Double?,
+        year: Int?
+    )
 
     @Query("SELECT * FROM watchlist WHERE isDirty = 1")
     suspend fun getDirtyRows(): List<WatchlistEntity>
@@ -41,19 +61,22 @@ interface WatchlistDao {
     @Query("UPDATE watchlist SET isDirty = 0 WHERE profileId = :profileId AND mediaId IN (:mediaIds) AND clientUpdatedAtMs <= :upToTimestamp")
     suspend fun markClean(mediaIds: List<String>, profileId: String = "default_user", upToTimestamp: Long)
 
+    @Query("UPDATE watchlist SET isDirty = 0 WHERE profileId = :profileId AND mediaId = :mediaId AND clientUpdatedAtMs = :expectedTimestamp")
+    suspend fun markCleanExact(mediaId: String, profileId: String = "default_user", expectedTimestamp: Long)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(item: WatchlistEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBatch(items: List<WatchlistEntity>)
 
-    @Query("UPDATE watchlist SET isDeleted = 1, isDirty = 1, clientUpdatedAtMs = :now WHERE profileId = :profileId AND mediaId = :mediaId")
+    @Query("UPDATE watchlist SET isDeleted = 1, isDirty = 1, clientUpdatedAtMs = MAX(:now, clientUpdatedAtMs + 1) WHERE profileId = :profileId AND mediaId = :mediaId")
     suspend fun softDelete(mediaId: String, profileId: String = "default_user", now: Long = System.currentTimeMillis())
 
-    @Query("UPDATE watchlist SET isDeleted = 1, isDirty = 1, clientUpdatedAtMs = :now WHERE profileId = :profileId AND mediaId IN (:mediaIds)")
+    @Query("UPDATE watchlist SET isDeleted = 1, isDirty = 1, clientUpdatedAtMs = MAX(:now, clientUpdatedAtMs + 1) WHERE profileId = :profileId AND mediaId IN (:mediaIds)")
     suspend fun softDeleteBatch(mediaIds: List<String>, profileId: String = "default_user", now: Long = System.currentTimeMillis())
 
-    @Query("UPDATE watchlist SET isDeleted = 1, isDirty = 1, clientUpdatedAtMs = :now WHERE profileId = :profileId")
+    @Query("UPDATE watchlist SET isDeleted = 1, isDirty = 1, clientUpdatedAtMs = MAX(:now, clientUpdatedAtMs + 1) WHERE profileId = :profileId")
     suspend fun softClearWatchlist(profileId: String = "default_user", now: Long = System.currentTimeMillis())
 
     @Query("DELETE FROM watchlist WHERE profileId = :profileId AND mediaId = :mediaId")

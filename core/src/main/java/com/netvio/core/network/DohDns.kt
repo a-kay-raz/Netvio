@@ -281,6 +281,13 @@ class DohDns(
             }
         }
 
+        /** Evicts all cached HTTP metadata responses from the shared disk cache */
+        fun evictHttpCache() {
+            try {
+                cachedClient?.cache?.evictAll()
+            } catch (_: Throwable) {}
+        }
+
         /** Client optimized for metadata (TMDB, AniList) with disk cache if initialized */
         val metadataClient: OkHttpClient
             get() = cachedClient ?: sharedBaseClient

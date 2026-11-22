@@ -197,6 +197,11 @@ object SequentialStreamManager {
         return if (current != null && (current.url == url || current.resolvedUrl == url) && !current.isClosed) current else null
     }
 
+    fun activeSessionDirName(): String? {
+        val current = activeSession
+        return if (current != null && !current.isClosed) current.getSessionDirectoryName() else null
+    }
+
     @Synchronized
     fun releaseActiveSession() {
         try {
@@ -207,9 +212,10 @@ object SequentialStreamManager {
 
     fun cleanOrphanedCache(context: Context) {
         try {
+            val activeDir = activeSessionDirName()
             val cacheDir = context.applicationContext.cacheDir
             cacheDir.listFiles()?.forEach { file ->
-                if (file.isDirectory && file.name.startsWith("seq_stream_")) {
+                if (file.isDirectory && file.name.startsWith("seq_stream_") && file.name != activeDir) {
                     file.deleteRecursively()
                 }
             }

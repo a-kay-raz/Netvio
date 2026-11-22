@@ -72,6 +72,7 @@ internal suspend fun resolveAndEnqueueStream(
     episode: EpisodeItem?,
     stream: StreamItem,
     debrid: DebridCredentials,
+    allowP2pFallback: Boolean = com.netvio.core.p2p.P2pSettingsRepository.isP2pEnabled(),
     onProgressNotice: ((String) -> Unit)? = null
 ): StreamResolutionOutcome {
     val cleanQuality = stream.quality ?: if (stream.isTorrentStream) "Torrent" else "Direct Stream"
@@ -107,11 +108,28 @@ internal suspend fun resolveAndEnqueueStream(
                 val preflight = downloadRepository.enqueueFromStream(detail, episode, directStream)
                 return StreamResolutionOutcome(preflight, "Downloading $cleanQuality...", directStream)
             }
-            onProgressNotice?.invoke("Debrid returned invalid URL, falling back to P2P...")
+            if (allowP2pFallback) {
+                onProgressNotice?.invoke("Debrid returned invalid URL, falling back to P2P...")
+            }
         } else {
             val err = resolveResult.exceptionOrNull()?.message ?: "Debrid resolution failed"
+            if (!allowP2pFallback) {
+                return StreamResolutionOutcome(
+                    StoragePreflightResult.UnsupportedStream("Debrid failed and P2P is disabled: $err"),
+                    "Debrid failed (P2P disabled)",
+                    stream
+                )
+            }
             onProgressNotice?.invoke("Debrid fallback to P2P: $err")
         }
+    }
+
+    if (!allowP2pFallback) {
+        return StreamResolutionOutcome(
+            StoragePreflightResult.UnsupportedStream("P2P streams & torrent downloads are disabled in settings"),
+            "P2P downloads disabled in settings",
+            stream
+        )
     }
 
     val torrentStream = stream.copy(url = magnet)

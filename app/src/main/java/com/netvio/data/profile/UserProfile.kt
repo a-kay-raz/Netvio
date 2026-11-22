@@ -131,8 +131,51 @@ data class UserProfile(
  */
 class ProfileManager private constructor(context: Context) {
 
-    private val prefs: SharedPreferences = context.getSharedPreferences("netvio_profiles", Context.MODE_PRIVATE)
+    private val appContext: Context = context.applicationContext
+    private val prefs: SharedPreferences = appContext.getSharedPreferences("netvio_profiles", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
+
+    private fun notifyProfileSync() {
+        runCatching {
+            com.netvio.data.sync.supabase.SupabaseSyncManager.getInstance(appContext).scheduleSync()
+        }
+    }
+
+    fun getPendingDeletedProfileIds(): Set<String> {
+        return prefs.getStringSet(KEY_DELETED_PROFILE_IDS, emptySet())?.toSet() ?: emptySet()
+    }
+
+    fun clearPendingDeletedProfileIds(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        val updated = getPendingDeletedProfileIds() - ids
+        prefs.edit().putStringSet(KEY_DELETED_PROFILE_IDS, updated).apply()
+    }
+
+    private fun addPendingDeletedProfileId(id: String) {
+        if (id.isBlank() || id == "default_user") return
+        val updatedDeleted = getPendingDeletedProfileIds() + id
+        val updatedSynced = getSyncedProfileIds() - id
+        prefs.edit()
+            .putStringSet(KEY_DELETED_PROFILE_IDS, updatedDeleted)
+            .putStringSet(KEY_SYNCED_PROFILE_IDS, updatedSynced)
+            .apply()
+    }
+
+    private fun removePendingDeletedProfileId(id: String) {
+        if (id.isBlank()) return
+        val current = getPendingDeletedProfileIds()
+        if (id in current) {
+            prefs.edit().putStringSet(KEY_DELETED_PROFILE_IDS, current - id).apply()
+        }
+    }
+
+    fun getSyncedProfileIds(): Set<String> {
+        return prefs.getStringSet(KEY_SYNCED_PROFILE_IDS, emptySet())?.toSet() ?: emptySet()
+    }
+
+    fun markProfilesSynced(activeIds: Set<String>) {
+        prefs.edit().putStringSet(KEY_SYNCED_PROFILE_IDS, activeIds.toSet()).apply()
+    }
 
     private val _profiles = MutableStateFlow<List<UserProfile>>(emptyList())
     val profiles: StateFlow<List<UserProfile>> = _profiles.asStateFlow()
@@ -236,12 +279,14 @@ class ProfileManager private constructor(context: Context) {
         val newList = currentList.toMutableList()
         newList[index] = finalProfile
         saveProfiles(newList)
+        removePendingDeletedProfileId(finalProfile.id)
         if (_activeProfile.value.id == finalProfile.id) {
             _activeProfile.value = finalProfile
             if (finalProfile.isPinLocked) {
                 unlockProfile(finalProfile.id)
             }
         }
+        notifyProfileSync()
         return true
     }
 
@@ -269,6 +314,8 @@ class ProfileManager private constructor(context: Context) {
         )
         val updated = _profiles.value + newProfile
         saveProfiles(updated)
+        removePendingDeletedProfileId(newProfile.id)
+        notifyProfileSync()
         return newProfile
     }
 
@@ -288,12 +335,14 @@ class ProfileManager private constructor(context: Context) {
         }
         val updated = _profiles.value + finalProfile
         saveProfiles(updated)
+        removePendingDeletedProfileId(finalProfile.id)
         _activeProfileId.value = finalProfile.id
         _activeProfile.value = finalProfile
         if (finalProfile.isPinLocked) {
             unlockProfile(finalProfile.id)
         }
         prefs.edit().putString(KEY_ACTIVE_ID, finalProfile.id).apply()
+        notifyProfileSync()
         return finalProfile
     }
 
@@ -342,14 +391,24 @@ class ProfileManager private constructor(context: Context) {
     fun mergeRemoteProfiles(remoteProfiles: List<com.netvio.core.sync.supabase.CloudUserProfile>) {
         if (remoteProfiles.isEmpty()) return
         val currentMap = _profiles.value.associateBy { it.id }.toMutableMap()
+        val pendingDeleted = getPendingDeletedProfileIds()
+        val previouslySynced = getSyncedProfileIds()
+        val remoteIds = mutableSetOf<String>()
+        val remoteActiveIds = mutableSetOf<String>()
+
         for (remote in remoteProfiles) {
             val normId = if (remote.profileId == "primary_profile") "default_user" else remote.profileId
+            remoteIds.add(normId)
             if (remote.isDeleted) {
                 if (normId != "default_user") {
                     currentMap.remove(normId)
                 }
                 continue
             }
+            if (normId != "default_user" && normId in pendingDeleted) {
+                continue
+            }
+            remoteActiveIds.add(normId)
             val existing = currentMap[normId]
             val role = try {
                 ProfileType.valueOf(remote.profileType.uppercase())
@@ -371,10 +430,23 @@ class ProfileManager private constructor(context: Context) {
                 isKids = (role == ProfileType.KIDS)
             )
         }
+        // Fallback reconciliation if server filtered out deleted profiles instead of returning tombstones
+        for (syncedId in previouslySynced) {
+            if (syncedId != "default_user" && syncedId !in remoteIds) {
+                currentMap.remove(syncedId)
+            }
+        }
+        markProfilesSynced(remoteActiveIds)
+
         val finalList = currentMap.values.toList().ifEmpty { defaultProfiles() }
         saveProfiles(finalList)
         val currentActiveId = _activeProfileId.value
-        _activeProfile.value = finalList.firstOrNull { it.id == currentActiveId } ?: finalList.first()
+        val resolvedActive = finalList.firstOrNull { it.id == currentActiveId } ?: finalList.first()
+        _activeProfile.value = resolvedActive
+        if (currentActiveId != resolvedActive.id) {
+            _activeProfileId.value = resolvedActive.id
+            prefs.edit().putString(KEY_ACTIVE_ID, resolvedActive.id).apply()
+        }
     }
 
     /**
@@ -393,11 +465,17 @@ class ProfileManager private constructor(context: Context) {
 
     fun deleteProfile(profileId: String): Boolean {
         if (_profiles.value.size <= 1) return false
-        val updated = _profiles.value.filter { it.id != profileId }
+        val normId = if (profileId == "primary_profile") "default_user" else profileId
+        if (_profiles.value.none { it.id == normId }) return false
+        val updated = _profiles.value.filter { it.id != normId }
         saveProfiles(updated)
-        if (_activeProfile.value.id == profileId) {
+        if (normId != "default_user") {
+            addPendingDeletedProfileId(normId)
+        }
+        if (_activeProfile.value.id == normId) {
             switchProfile(updated.first().id)
         }
+        notifyProfileSync()
         return true
     }
 
@@ -415,6 +493,8 @@ class ProfileManager private constructor(context: Context) {
     companion object {
         private const val KEY_PROFILES = "profiles_list"
         private const val KEY_ACTIVE_ID = "active_profile_id"
+        private const val KEY_DELETED_PROFILE_IDS = "deleted_profile_ids"
+        private const val KEY_SYNCED_PROFILE_IDS = "synced_profile_ids"
 
         @Volatile
         private var instance: ProfileManager? = null

@@ -51,10 +51,23 @@ class NetvioApp : Application(), SingletonImageLoader.Factory {
                 PreferencesRepository.getInstance(this@NetvioApp).getCatalogPreferences()
             }
 
-        // Initialize plugins, prefetch DNS, and restore default selected provider across restarts
+        // Initialize plugins, run smart cache maintenance, sync P2P policy, prefetch DNS & restore provider
         CoroutineScope(Dispatchers.IO).launch {
             // Disk scan, so it runs off the main thread instead of in onCreate.
             com.netvio.ui.player.sequential.SequentialStreamManager.cleanOrphanedCache(this@NetvioApp)
+            try {
+                val prefsRepo = PreferencesRepository.getInstance(this@NetvioApp)
+                com.netvio.core.p2p.P2pSettingsRepository.setP2pEnabled(prefsRepo.p2pStreamsEnabled.first())
+                launch {
+                    prefsRepo.p2pStreamsEnabled.collect { enabled ->
+                        com.netvio.core.p2p.P2pSettingsRepository.setP2pEnabled(enabled)
+                    }
+                }
+            } catch (_: Exception) {}
+
+            try {
+                com.netvio.data.cache.AppCacheManager.runAutomaticMaintenance(this@NetvioApp)
+            } catch (_: Exception) {}
             try {
                 com.netvio.core.js.JsPluginStorage.getInstance(this@NetvioApp).initialize()
                 com.netvio.core.addons.AddonRepository.getInstance(this@NetvioApp).initialize()
@@ -141,7 +154,6 @@ class NetvioApp : Application(), SingletonImageLoader.Factory {
                     android.util.Log.w("NetvioApp", "Startup plugin auto-update error: ${e.message}")
                 }
             }
-
             launch(Dispatchers.IO) {
                 // Non-critical: poster repair (database work) also waits for
                 // the first frame.
@@ -221,11 +233,21 @@ class NetvioApp : Application(), SingletonImageLoader.Factory {
             .diskCache {
                 DiskCache.Builder()
                     .directory(cacheDir.resolve("image_cache").toOkioPath())
-                    .maxSizeBytes(250L * 1024 * 1024)
+                    .maxSizeBytes(com.netvio.data.cache.AppCacheManager.getCoilDiskCacheCapBytes(this))
                     .build()
             }
             .bitmapConfig(Bitmap.Config.HARDWARE)
             .crossfade(220)
             .build()
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            runCatching {
+                coil3.SingletonImageLoader.get(this).memoryCache?.clear()
+            }
+        }
     }
 }

@@ -139,6 +139,31 @@ data class TraktSyncItemsPayload(
 )
 
 @Serializable
+data class TraktSyncEpisode(
+    val number: Int
+)
+
+@Serializable
+data class TraktSyncSeason(
+    val number: Int,
+    val episodes: List<TraktSyncEpisode> = emptyList()
+)
+
+@Serializable
+data class TraktHistoryShow(
+    val title: String = "",
+    val year: Int? = null,
+    val ids: TraktIds = TraktIds(),
+    val seasons: List<TraktSyncSeason>? = null
+)
+
+@Serializable
+data class TraktHistoryPayload(
+    val movies: List<TraktMovie> = emptyList(),
+    val shows: List<TraktHistoryShow> = emptyList()
+)
+
+@Serializable
 data class TraktSyncResponse(
     val added: TraktSyncCount? = null,
     val deleted: TraktSyncCount? = null,

@@ -91,6 +91,34 @@ class PluginManagerViewModel(
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
+    val p2pStreamsEnabled: StateFlow<Boolean> = preferencesRepository.p2pStreamsEnabled
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            com.netvio.core.p2p.P2pSettingsRepository.isP2pEnabled()
+        )
+
+    val hasActiveDebrid: StateFlow<Boolean> = combine(
+        preferencesRepository.debridEnabled,
+        preferencesRepository.activeDebridProvider,
+        preferencesRepository.realDebridApiKey,
+        preferencesRepository.allDebridApiKey,
+        preferencesRepository.torBoxApiKey
+    ) { enabled, provider, rdKey, adKey, tbKey ->
+        enabled && provider != "NONE" && (rdKey.isNotBlank() || adKey.isNotBlank() || tbKey.isNotBlank())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun setP2pStreamsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setP2pStreamsEnabled(enabled)
+            com.netvio.core.p2p.P2pSettingsRepository.setP2pEnabled(enabled)
+            com.netvio.core.streams.StreamsRepository.clear()
+            if (!enabled) {
+                com.netvio.core.p2p.P2pStreamingEngine.shutdownForDisable()
+            }
+        }
+    }
+
     val activePluginName: StateFlow<String> = registry.activePlugin.map { it.name }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), registry.activePlugin.value.name)
 
@@ -335,6 +363,7 @@ class PluginManagerViewModel(
                 val count = pluginService.installAllFromRepo(trimmed)
                 if (count >= 0) {
                     preferencesRepository.addRepositoryUrl(trimmed)
+                    preferencesRepository.removePendingDeletedAddonUrl(trimmed)
                     loadPlugins()
                     SupabaseSyncManager.getInstance(getApplication()).scheduleSync()
                     withContext(Dispatchers.Main) {
@@ -377,7 +406,7 @@ class PluginManagerViewModel(
     fun removeRepository(url: String) {
         viewModelScope.launch {
             pluginService.removeRepository(url)
-            preferencesRepository.addPendingDeletedAddonUrl(url)
+            preferencesRepository.addPendingDeletedAddonUrl(url, "js_repo")
             loadPlugins()
             SupabaseSyncManager.getInstance(getApplication()).scheduleSync()
         }
@@ -387,6 +416,7 @@ class PluginManagerViewModel(
         viewModelScope.launch {
             val res = addonRepository.installAddon(url)
             if (res.isSuccess) {
+                preferencesRepository.removePendingDeletedAddonUrl(url)
                 SupabaseSyncManager.getInstance(getApplication()).scheduleSync()
             }
             withContext(Dispatchers.Main) {
@@ -415,7 +445,7 @@ class PluginManagerViewModel(
             if (!manifestId.isNullOrBlank()) {
                 preferencesRepository.removeCatalogPreferencesForManifestId(manifestId)
             }
-            preferencesRepository.addPendingDeletedAddonUrl(manifestUrl)
+            preferencesRepository.addPendingDeletedAddonUrl(manifestUrl, "stremio")
             SupabaseSyncManager.getInstance(getApplication()).scheduleSync()
         }
     }

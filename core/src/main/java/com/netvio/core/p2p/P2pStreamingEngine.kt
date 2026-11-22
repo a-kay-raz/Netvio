@@ -209,6 +209,11 @@ object P2pStreamingEngine {
         if (context != null) {
             initialize(context)
         }
+        P2pSettingsRepository.ensureLoaded()
+        if (!P2pSettingsRepository.uiState.value.p2pEnabled) {
+            Log.d(TAG, "Skipping P2P engine pre-warm because P2P streams are disabled")
+            return
+        }
         scope.launch(Dispatchers.IO) {
             try {
                 startMutex.withLock {
@@ -292,6 +297,10 @@ object P2pStreamingEngine {
         onProgress: (bytesDownloaded: Long, totalBytes: Long, percent: Float, speed: String) -> Unit,
         isCancelled: () -> Boolean = { false },
     ): File = withContext(Dispatchers.IO) {
+        P2pSettingsRepository.ensureLoaded()
+        if (!P2pSettingsRepository.uiState.value.p2pEnabled) {
+            throw P2pStreamingException("P2P streams are disabled in settings")
+        }
         val context = requireContext()
         val canonicalHash = canonicalP2pInfoHash(request.infoHash)
 
@@ -621,7 +630,44 @@ object P2pStreamingEngine {
         }
     }
 
+    suspend fun clearCacheIfIdle(context: Context): Boolean = withContext(Dispatchers.IO) {
+        startMutex.withLock {
+            if (isStreamActive()) return@withLock false
+            _cacheState.value = _cacheState.value.copy(isClearing = true)
+            try {
+                if (engine != null) {
+                    closeEngine(engine)
+                }
+                val appCtx = context.applicationContext
+                val engineCacheDir = File(appCtx.cacheDir, "nuvio-engine")
+                val metaDir = File(appCtx.cacheDir, "torrent_meta")
+                if (engineCacheDir.exists()) {
+                    engineCacheDir.listFiles()?.forEach { it.deleteRecursively() }
+                }
+                if (metaDir.exists()) {
+                    metaDir.listFiles()?.forEach { it.deleteRecursively() }
+                }
+                _cacheState.value = P2pCacheUiState(
+                    usedBytes = 0L,
+                    protectedBytes = 0L,
+                    isClearing = false,
+                    hasMeasurement = true
+                )
+                true
+            } catch (e: Throwable) {
+                Log.w(TAG, "Failed idle P2P cache cleanup: ${e.message}")
+                false
+            } finally {
+                _cacheState.value = _cacheState.value.copy(isClearing = false)
+            }
+        }
+    }
+
     private suspend fun startStreamLocked(request: P2pStreamRequest): String {
+        P2pSettingsRepository.ensureLoaded()
+        if (!P2pSettingsRepository.uiState.value.p2pEnabled) {
+            throw P2pStreamingException("P2P streams are disabled in settings")
+        }
         val canonicalHash = canonicalP2pInfoHash(request.infoHash)
         if (_state.value is P2pStreamingState.Streaming) {
             val curReq = activeRequest
@@ -839,6 +885,13 @@ object P2pStreamingEngine {
     }
 
     fun shutdown() {
+        scheduleStop(shutdownEngine = true, evictTorrent = true)
+    }
+
+    fun isStreamActive(): Boolean =
+        _state.value is P2pStreamingState.Streaming || _state.value is P2pStreamingState.Connecting
+
+    fun shutdownForDisable() {
         scheduleStop(shutdownEngine = true, evictTorrent = true)
     }
 

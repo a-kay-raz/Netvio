@@ -101,3 +101,27 @@ data class SimklSyncItem(
     val to: String? = null, // "plantowatch", "watching", "completed", "hold", "dropped"
     val ids: SimklIds? = null
 )
+
+@Serializable
+data class SimklHistoryEpisode(
+    val number: Int
+)
+
+@Serializable
+data class SimklHistorySeason(
+    val number: Int,
+    val episodes: List<SimklHistoryEpisode> = emptyList()
+)
+
+@Serializable
+data class SimklHistoryShow(
+    val title: String? = null,
+    val ids: SimklIds? = null,
+    val seasons: List<SimklHistorySeason>? = null
+)
+
+@Serializable
+data class SimklHistoryPayload(
+    val movies: List<SimklSyncItem> = emptyList(),
+    val shows: List<SimklHistoryShow> = emptyList()
+)

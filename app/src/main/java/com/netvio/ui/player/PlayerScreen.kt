@@ -107,6 +107,7 @@ fun PlayerScreen(
     var showUnlockButton by remember { mutableStateOf(false) }
     var unlockDismissJob by remember { mutableStateOf<Job?>(null) }
     var showCastPickerSheet by remember { mutableStateOf(false) }
+    var showTvCompanionSheet by remember { mutableStateOf(false) }
     var showRemainingTime by remember { mutableStateOf(true) }
     val playerFocusRequester = remember { FocusRequester() }
 
@@ -189,6 +190,7 @@ fun PlayerScreen(
 
     val handleBackNavigation: () -> Unit = {
         when {
+            showTvCompanionSheet -> showTvCompanionSheet = false
             showCastPickerSheet -> showCastPickerSheet = false
             uiState.isEpisodeSelectorOpen -> viewModel.setEpisodeSelectorOpen(false)
             uiState.activeSidePanel != PlayerSidePanelType.NONE -> viewModel.closeSidePanel()
@@ -210,8 +212,8 @@ fun PlayerScreen(
         }
     }
 
-    LaunchedEffect(showCastPickerSheet, uiState.activeSidePanel, uiState.isEpisodeSelectorOpen) {
-        if (!showCastPickerSheet && uiState.activeSidePanel == PlayerSidePanelType.NONE && !uiState.isEpisodeSelectorOpen) {
+    LaunchedEffect(showCastPickerSheet, showTvCompanionSheet, uiState.activeSidePanel, uiState.isEpisodeSelectorOpen) {
+        if (!showCastPickerSheet && !showTvCompanionSheet && uiState.activeSidePanel == PlayerSidePanelType.NONE && !uiState.isEpisodeSelectorOpen) {
             playerFocusRequester.requestFocus()
         }
     }
@@ -1049,13 +1051,60 @@ fun PlayerScreen(
                     .zIndex(18f)
             )
 
-            // Layer 14: Cast & External Playback Picker Sheet
-            if (showCastPickerSheet) {
-                CastPickerSheet(
-                    streamSource = uiState.selectedServer?.streamSource,
-                    mediaTitle = uiState.mediaTitle,
-                    onDismiss = { showCastPickerSheet = false }
+            // Layer 14: Cast & External Playback Picker Sheet & TV Companion
+            if (showCastPickerSheet || showTvCompanionSheet) {
+                val companionContext = androidx.compose.ui.platform.LocalContext.current
+                val activeStreamSource = uiState.selectedServer?.streamSource
+                val activeSub = uiState.selectedSubtitle.takeIf { it.id != "off" && !it.url.isNullOrBlank() }
+                val activeProfileId = com.netvio.data.profile.ProfileManager
+                    .getInstance(companionContext)
+                    .activeProfile
+                    .value
+                    .id
+                    .ifBlank { "default_user" }
+                val currentHandoffContext = com.netvio.data.tv.TvHandoffPayload(
+                    action = "play",
+                    mediaId = mediaId,
+                    title = uiState.mediaTitle,
+                    mediaType = uiState.mediaType.name,
+                    provider = provider ?: uiState.providerName,
+                    episodeData = episodeData,
+                    episodeTitle = uiState.episodeTitle,
+                    seasonNumber = uiState.seasonNumber,
+                    episodeNumber = uiState.episodeNumber,
+                    positionMs = uiState.currentPositionMs,
+                    durationMs = uiState.durationMs,
+                    posterUrl = uiState.backdropUrl,
+                    backdropUrl = uiState.backdropUrl,
+                    streamUrl = activeStreamSource?.url,
+                    streamHeaders = activeStreamSource?.headers ?: emptyMap(),
+                    isM3u8 = activeStreamSource?.isM3u8 ?: false,
+                    subtitleUrl = activeSub?.url,
+                    subtitleLabel = activeSub?.label,
+                    profileId = activeProfileId
                 )
+
+                if (showCastPickerSheet) {
+                    CastPickerSheet(
+                        streamSource = activeStreamSource,
+                        mediaTitle = uiState.mediaTitle,
+                        handoffContext = currentHandoffContext,
+                        onPlaybackHandedOffToTv = { viewModel.pause() },
+                        onOpenTvRemote = {
+                            showCastPickerSheet = false
+                            showTvCompanionSheet = true
+                        },
+                        onDismiss = { showCastPickerSheet = false }
+                    )
+                }
+
+                if (showTvCompanionSheet) {
+                    com.netvio.ui.tv.TvCompanionSheet(
+                        pendingHandoff = currentHandoffContext,
+                        onHandoffSent = { viewModel.pause() },
+                        onDismiss = { showTvCompanionSheet = false }
+                    )
+                }
             }
         }
     }

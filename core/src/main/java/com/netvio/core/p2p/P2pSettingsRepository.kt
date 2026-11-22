@@ -24,7 +24,7 @@ object P2pSettingsRepository {
     private var enableUpload = true
     private var hideTorrentStats = false
     private var torrentProfile = P2pTorrentProfile.BALANCED
-    private var cacheSize = P2pCacheSize.GB_2
+    private var cacheSize = P2pCacheSize.MB_512
 
     fun initialize(context: Context) {
         preferences = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -34,6 +34,11 @@ object P2pSettingsRepository {
     fun ensureLoaded() {
         if (hasLoaded) return
         loadFromDisk()
+    }
+
+    fun isP2pEnabled(): Boolean {
+        ensureLoaded()
+        return p2pEnabled
     }
 
     fun setP2pEnabled(enabled: Boolean) {
@@ -87,7 +92,7 @@ object P2pSettingsRepository {
             ?: P2pTorrentProfile.BALANCED
         cacheSize = prefs?.getString(KEY_CACHE_SIZE, null)
             ?.let { stored -> P2pCacheSize.entries.firstOrNull { it.name == stored } }
-            ?: P2pCacheSize.GB_2
+            ?: P2pCacheSize.MB_512
         publish()
     }
 

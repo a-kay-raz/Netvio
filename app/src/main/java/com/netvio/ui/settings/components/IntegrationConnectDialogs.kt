@@ -1,23 +1,38 @@
 package com.netvio.ui.settings.components
 
-import android.os.Build
-import android.view.WindowManager
+import android.content.Context
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,1278 +42,165 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.ErrorOutline
-import androidx.compose.material.icons.outlined.Key
-import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.OpenInNew
-import androidx.compose.material.icons.outlined.Tv
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.runtime.*
-import androidx.compose.foundation.Image
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.DialogWindowProvider
 import com.netvio.R
+import com.netvio.core.sync.simkl.SimklClient
+import com.netvio.core.sync.trakt.TraktClient
+import com.netvio.data.preferences.PreferencesRepository
 import com.netvio.ui.settings.plugins.pluginsPressable
 import com.netvio.ui.theme.AppFontFamily
+import com.netvio.ui.theme.ApplyWindowBlurEffect
 import com.netvio.ui.theme.NetvioGlassTokens
 import com.netvio.ui.theme.LocalAmoledMode
 import com.netvio.ui.theme.LocalReduceMotion
-import com.netvio.ui.theme.netvioGlassCard
 import com.netvio.ui.theme.adaptiveHorizontalSafePadding
-import com.netvio.ui.theme.rememberWindowDimensions
+import com.netvio.ui.theme.netvioGlassCard
 import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.launch
 
+@Immutable
+private data class OAuthTrackerDialogSpec(
+    val trackerName: String,
+    val subtitle: String,
+    val browserHelperCopy: String,
+    val inputLabel: String,
+    val inputPlaceholder: String,
+    val accentColor: Color,
+    val headerBrandMark: @Composable () -> Unit
+)
+
 /**
- * High-Fidelity Frosted-Glass Dialog for Trakt.tv PKCE Authentication.
- *
- * Implements the Apple Design & UI Triumvirate craft standards:
- * - Window blur behind (FLAG_BLUR_BEHIND on API 31+) with 45px blur radius.
- * - Physics-based entrance: scale from 0.94f to 1.0f + 160ms alpha fade-in.
- * - Tactile error state: horizontal spring shake animation on verification failure.
- * - Standardized Netvio Dialog Tokens (28dp radius, 0.5dp hairline border, 65% black scrim).
- * - Step-by-step guidance with instant clipboard auto-extraction and direct web handoff.
+ * Vector emblem representing the Trakt checkmark badge.
  */
 @Composable
-fun TraktConnectDialog(
-    hazeState: HazeState? = null,
-    isTraktValidating: Boolean = false,
-    traktAuthError: String? = null,
-    onDismiss: () -> Unit,
-    onConnect: (String) -> Unit,
-    onClearError: () -> Unit = {}
+fun TraktBrandEmblem(
+    size: Dp = 24.dp,
+    modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val uriHandler = LocalUriHandler.current
-    val clipboardManager = LocalClipboardManager.current
-    val haptic = LocalHapticFeedback.current
-    val isAmoled = LocalAmoledMode.current
-    val reduceMotion = LocalReduceMotion.current
-    val coroutineScope = rememberCoroutineScope()
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val corner = CornerRadius(w * 0.26f, h * 0.26f)
 
-    var traktCodeInput by remember { mutableStateOf("") }
-    var isInputFocused by remember { mutableStateOf(false) }
-    var isVisible by remember { mutableStateOf(reduceMotion) }
-
-    // Error shake animation
-    val shakeOffset = remember { Animatable(0f) }
-    LaunchedEffect(traktAuthError) {
-        if (traktAuthError != null && !reduceMotion) {
-            shakeOffset.snapTo(0f)
-            shakeOffset.animateTo(
-                targetValue = 0f,
-                animationSpec = keyframes {
-                    durationMillis = 350
-                    0f at 0
-                    (-8f) at 50
-                    8f at 100
-                    (-6f) at 150
-                    6f at 200
-                    (-3f) at 250
-                    3f at 300
-                    0f at 350
-                }
-            )
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        isVisible = true
-    }
-
-    val cardScale by animateFloatAsState(
-        targetValue = if (isVisible) 1f else 0.94f,
-        animationSpec = if (reduceMotion) snap() else spring(dampingRatio = 0.80f, stiffness = 500f),
-        label = "traktDialogCardScale"
-    )
-    val cardAlpha by animateFloatAsState(
-        targetValue = if (isVisible) 1f else 0f,
-        animationSpec = if (reduceMotion) snap() else tween(durationMillis = 160, easing = LinearOutSlowInEasing),
-        label = "traktDialogCardAlpha"
-    )
-    val scrimAlpha by animateFloatAsState(
-        targetValue = if (isVisible) NetvioGlassTokens.ScrimAlpha else 0f,
-        animationSpec = if (reduceMotion) snap() else tween(durationMillis = 180, easing = LinearOutSlowInEasing),
-        label = "traktDialogScrimAlpha"
-    )
-
-    Dialog(
-        onDismissRequest = { if (!isTraktValidating) onDismiss() },
-        properties = DialogProperties(
-            dismissOnBackPress = true,
-            dismissOnClickOutside = true,
-            usePlatformDefaultWidth = false
+        drawRoundRect(
+            color = Color(0xFFED1C24),
+            size = this.size,
+            cornerRadius = corner
         )
-    ) {
-        val view = LocalView.current
-        SideEffect {
-            val window = (view.parent as? DialogWindowProvider)?.window
-                ?: generateSequence(view.parent) { it.parent }
-                    .filterIsInstance<DialogWindowProvider>()
-                    .firstOrNull()?.window
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && window != null) {
-                window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
-                window.setDimAmount(0f)
-                val lp = window.attributes
-                lp.blurBehindRadius = 45
-                window.attributes = lp
-            }
+
+        drawRoundRect(
+            color = Color.White.copy(alpha = 0.22f),
+            topLeft = Offset(w * 0.02f, h * 0.02f),
+            size = Size(w * 0.96f, h * 0.96f),
+            cornerRadius = CornerRadius(w * 0.24f, h * 0.24f),
+            style = Stroke(width = (w * 0.04f).coerceAtLeast(1f))
+        )
+
+        drawCircle(
+            color = Color.White,
+            radius = w * 0.27f,
+            center = Offset(w * 0.50f, h * 0.50f),
+            style = Stroke(width = w * 0.085f)
+        )
+
+        val checkPath = Path().apply {
+            moveTo(w * 0.37f, h * 0.51f)
+            lineTo(w * 0.47f, h * 0.60f)
+            lineTo(w * 0.65f, h * 0.40f)
         }
-
-        val cardShape = RoundedCornerShape(NetvioGlassTokens.RadiusDialog)
-
-        // Animated Scrim
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = scrimAlpha))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = { if (!isTraktValidating) onDismiss() }
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            // Dialog Card
-            val windowDims = rememberWindowDimensions()
-            Box(
-                modifier = Modifier
-                    .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false)
-                    .widthIn(max = 410.dp)
-                    .fillMaxWidth()
-                    .heightIn(max = windowDims.dialogMaxHeight())
-                    .imePadding()
-                    .graphicsLayer {
-                        scaleX = cardScale
-                        scaleY = cardScale
-                        alpha = cardAlpha
-                    }
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = {} // Intercept clicks inside card
-                    )
-                    .netvioGlassCard(
-                        shape = cardShape,
-                        hazeState = hazeState,
-                        isAmoled = isAmoled
-                    )
-                    .padding(24.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    // Header Row with Tile, Titles and Close Action
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // 44x44dp Glass Icon Tile
-                        Box(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(RoundedCornerShape(13.dp))
-                                .background(Color.White.copy(alpha = 0.07f))
-                                .border(
-                                    NetvioGlassTokens.HairlineWidth,
-                                    NetvioGlassTokens.HairlineBorder,
-                                    RoundedCornerShape(13.dp)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Tv,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(14.dp))
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Connect Trakt.tv",
-                                style = NetvioGlassTokens.HeaderTitle,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "OAuth 2.0 PKCE • No client secret",
-                                style = NetvioGlassTokens.HeaderSubtitle
-                            )
-                        }
-
-                        // Close "X" Button
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.06f))
-                                .border(
-                                    NetvioGlassTokens.HairlineWidth,
-                                    NetvioGlassTokens.HairlineBorder,
-                                    CircleShape
-                                )
-                                .pluginsPressable(
-                                    scaleDown = 0.94f,
-                                    onClick = {
-                                        if (!isTraktValidating) {
-                                            try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
-                                            onDismiss()
-                                        }
-                                    }
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Close,
-                                contentDescription = "Close dialog",
-                                tint = Color.White.copy(alpha = 0.75f),
-                                modifier = Modifier.size(17.dp)
-                            )
-                        }
-                    }
-
-                    // Hairline Divider
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(NetvioGlassTokens.HairlineWidth)
-                            .background(NetvioGlassTokens.HairlineDivider)
-                    )
-
-                    // Explanatory Body Copy
-                    Text(
-                        text = "Authorize Netvio with Trakt to automatically sync your watched history, scrobble media, and keep watchlists aligned across all your devices.",
-                        style = NetvioGlassTokens.BodyText
-                    )
-
-                    // Step 1: External Authorization Handshake
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        StepIndicatorBadge(stepNumber = 1, label = "Authorize in browser")
-
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(Color.White.copy(alpha = 0.06f))
-                                .border(
-                                    NetvioGlassTokens.HairlineWidth,
-                                    NetvioGlassTokens.HairlineBorder,
-                                    RoundedCornerShape(16.dp)
-                                )
-                                .pluginsPressable(
-                                    scaleDown = 0.98f,
-                                    onClick = {
-                                        try {
-                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                            val authUrl = com.netvio.core.sync.trakt.TraktClient.getInstance().getAuthorizationUrl()
-                                            val verifier = com.netvio.core.sync.trakt.TraktClient.getInstance().pendingCodeVerifier
-                                            if (!verifier.isNullOrBlank()) {
-                                                // Persist synchronously to SharedPreferences so it survives backgrounding or process death
-                                                context.getSharedPreferences("trakt_auth_prefs", android.content.Context.MODE_PRIVATE)
-                                                    .edit()
-                                                    .putString("pending_code_verifier", verifier)
-                                                    .commit()
-
-                                                coroutineScope.launch {
-                                                    com.netvio.data.preferences.PreferencesRepository.getInstance(context).setTraktCodeVerifier(verifier)
-                                                }
-                                            }
-                                            uriHandler.openUri(authUrl)
-                                        } catch (_: Exception) {}
-                                    }
-                                )
-                                .padding(horizontal = 16.dp, vertical = 13.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Open Trakt.tv Authorization",
-                                        style = TextStyle(
-                                            fontFamily = AppFontFamily,
-                                            fontWeight = FontWeight.SemiBold,
-                                            fontSize = 14.sp,
-                                            color = Color.White
-                                        )
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = "Sign in & tap 'Yes' to grant read/write access",
-                                        style = TextStyle(
-                                            fontFamily = AppFontFamily,
-                                            fontWeight = FontWeight.Normal,
-                                            fontSize = 12.sp,
-                                            color = Color.White.copy(alpha = 0.54f)
-                                        )
-                                    )
-                                }
-                                Icon(
-                                    imageVector = Icons.Outlined.OpenInNew,
-                                    contentDescription = null,
-                                    tint = Color.White.copy(alpha = 0.85f),
-                                    modifier = Modifier.size(19.dp)
-                                )
-                            }
-                        }
-
-                        Text(
-                            text = "Note: After authorizing on Trakt, your browser will redirect to localhost and show 'Unable to connect'. That is normal! Copy the URL from the browser bar and paste it below.",
-                            style = TextStyle(
-                                fontFamily = AppFontFamily,
-                                fontWeight = FontWeight.Normal,
-                                fontSize = 11.5.sp,
-                                lineHeight = 16.sp,
-                                color = Color.White.copy(alpha = 0.55f)
-                            )
-                        )
-                    }
-
-                    // Step 2: Code Extraction Input
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        StepIndicatorBadge(stepNumber = 2, label = "Paste redirect link or code")
-
-                        val inputBorderColor by animateColorAsState(
-                            targetValue = when {
-                                isInputFocused -> Color.White.copy(alpha = 0.40f)
-                                traktCodeInput.isNotBlank() -> Color.White.copy(alpha = 0.24f)
-                                else -> NetvioGlassTokens.HairlineBorder
-                            },
-                            animationSpec = tween(durationMillis = 150),
-                            label = "traktInputBorder"
-                        )
-
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(Color.White.copy(alpha = 0.05f))
-                                .border(
-                                    NetvioGlassTokens.HairlineWidth,
-                                    inputBorderColor,
-                                    RoundedCornerShape(16.dp)
-                                )
-                                .padding(horizontal = 14.dp, vertical = 11.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Link,
-                                    contentDescription = null,
-                                    tint = Color.White.copy(alpha = 0.50f),
-                                    modifier = Modifier.size(19.dp)
-                                )
-
-                                Spacer(modifier = Modifier.width(10.dp))
-
-                                Box(modifier = Modifier.weight(1f)) {
-                                    if (traktCodeInput.isEmpty()) {
-                                        Text(
-                                            text = "Paste redirect URL or authorization code...",
-                                            style = TextStyle(
-                                                fontFamily = AppFontFamily,
-                                                fontWeight = FontWeight.Normal,
-                                                fontSize = 13.sp,
-                                                color = Color.White.copy(alpha = 0.38f)
-                                            ),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                    BasicTextField(
-                                        value = traktCodeInput,
-                                        onValueChange = {
-                                            val raw = it.trim()
-                                            val extracted = Regex("""code=([^&]+)""").find(raw)?.groupValues?.get(1) ?: raw
-                                            traktCodeInput = extracted
-                                            onClearError()
-                                        },
-                                        singleLine = true,
-                                        textStyle = TextStyle(
-                                            fontFamily = AppFontFamily,
-                                            fontWeight = FontWeight.Normal,
-                                            fontSize = 13.sp,
-                                            color = Color.White
-                                        ),
-                                        cursorBrush = SolidColor(Color.White),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .onFocusChanged { isInputFocused = it.isFocused }
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.width(8.dp))
-
-                                // Paste or Clear Button
-                                if (traktCodeInput.isNotBlank()) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .clip(CircleShape)
-                                            .background(Color.White.copy(alpha = 0.08f))
-                                            .pluginsPressable(
-                                                scaleDown = 0.90f,
-                                                onClick = {
-                                                    try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
-                                                    traktCodeInput = ""
-                                                    onClearError()
-                                                }
-                                            ),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.Close,
-                                            contentDescription = "Clear input",
-                                            tint = Color.White.copy(alpha = 0.70f),
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                } else {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(CircleShape)
-                                            .background(Color.White.copy(alpha = 0.09f))
-                                            .border(
-                                                NetvioGlassTokens.HairlineWidth,
-                                                NetvioGlassTokens.HairlineBorder,
-                                                CircleShape
-                                            )
-                                            .pluginsPressable(
-                                                scaleDown = 0.94f,
-                                                onClick = {
-                                                    val text = clipboardManager.getText()?.text
-                                                    if (!text.isNullOrBlank()) {
-                                                        val raw = text.trim()
-                                                        val extracted = Regex("""code=([^&]+)""").find(raw)?.groupValues?.get(1) ?: raw
-                                                        traktCodeInput = extracted
-                                                        onClearError()
-                                                        try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
-                                                    }
-                                                }
-                                            )
-                                            .padding(horizontal = 11.dp, vertical = 6.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Outlined.ContentPaste,
-                                                contentDescription = null,
-                                                tint = Color.White,
-                                                modifier = Modifier.size(13.dp)
-                                            )
-                                            Text(
-                                                text = "Paste",
-                                                style = TextStyle(
-                                                    fontFamily = AppFontFamily,
-                                                    fontWeight = FontWeight.Medium,
-                                                    fontSize = 11.5.sp,
-                                                    color = Color.White
-                                                )
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Inline Error Banner with Spring Shake
-                    AnimatedVisibility(
-                        visible = traktAuthError != null,
-                        enter = fadeIn(tween(150)),
-                        exit = fadeOut(tween(150))
-                    ) {
-                        if (traktAuthError != null) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .graphicsLayer { translationX = shakeOffset.value }
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(Color(0xFFE57373).copy(alpha = 0.12f))
-                                    .border(
-                                        NetvioGlassTokens.HairlineWidth,
-                                        Color(0xFFE57373).copy(alpha = 0.35f),
-                                        RoundedCornerShape(14.dp)
-                                    )
-                                    .padding(horizontal = 14.dp, vertical = 10.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.ErrorOutline,
-                                        contentDescription = null,
-                                        tint = Color(0xFFFF8A80),
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Text(
-                                        text = traktAuthError,
-                                        style = TextStyle(
-                                            fontFamily = AppFontFamily,
-                                            fontWeight = FontWeight.Normal,
-                                            fontSize = 12.5.sp,
-                                            lineHeight = 16.sp,
-                                            color = Color.White.copy(alpha = 0.92f)
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    // Dialog Actions Footer: Cancel on left, Connect on right
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        // Frosted Cancel Pill
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.08f))
-                                .border(
-                                    NetvioGlassTokens.HairlineWidth,
-                                    NetvioGlassTokens.HairlineBorder,
-                                    CircleShape
-                                )
-                                .pluginsPressable(
-                                    enabled = !isTraktValidating,
-                                    scaleDown = 0.97f,
-                                    onClick = {
-                                        try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
-                                        onDismiss()
-                                    }
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "Cancel",
-                                style = NetvioGlassTokens.SecondaryButtonText.copy(
-                                    color = Color.White.copy(alpha = 0.85f),
-                                    fontWeight = FontWeight.Medium
-                                )
-                            )
-                        }
-
-                        // Solid White Connect Pill
-                        val canConnect = traktCodeInput.isNotBlank() && !isTraktValidating
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .clip(CircleShape)
-                                .background(if (canConnect) Color.White else Color.White.copy(alpha = 0.35f))
-                                .pluginsPressable(
-                                    enabled = canConnect,
-                                    scaleDown = 0.97f,
-                                    onClick = {
-                                        val raw = traktCodeInput.trim()
-                                        val extractedCode = Regex("""code=([^&]+)""").find(raw)?.groupValues?.get(1) ?: raw
-                                        if (extractedCode.isNotBlank()) {
-                                            try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
-                                            onConnect(extractedCode)
-                                        }
-                                    }
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (isTraktValidating) {
-                                CircularProgressIndicator(
-                                    strokeWidth = 2.dp,
-                                    color = NetvioGlassTokens.TextDark,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            } else {
-                                Text(
-                                    text = "Connect",
-                                    style = NetvioGlassTokens.PrimaryButtonText.copy(
-                                        color = if (canConnect) NetvioGlassTokens.TextDark else NetvioGlassTokens.TextDark.copy(alpha = 0.50f)
-                                    )
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        drawPath(
+            path = checkPath,
+            color = Color.White,
+            style = Stroke(
+                width = w * 0.095f,
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+            )
+        )
     }
 }
 
 /**
- * High-Fidelity Frosted-Glass Dialog for Simkl API Token Authentication.
- *
- * Implements the Apple Design & UI Triumvirate craft standards:
- * - Window blur behind (FLAG_BLUR_BEHIND on API 31+) with 45px blur radius.
- * - Physics-based entrance: scale from 0.94f to 1.0f + 160ms alpha fade-in.
- * - Tactile error state: horizontal spring shake animation on invalid token.
- * - Standardized Netvio Dialog Tokens (28dp radius, 0.5dp hairline border, 65% black scrim).
- * - Direct developer dashboard shortcut and one-tap clipboard token import.
+ * Crisp emblem + monochrome wordmark lockup for Trakt.tv cards and dialogs.
  */
 @Composable
-fun SimklConnectDialog(
-    hazeState: HazeState? = null,
-    isSimklValidating: Boolean = false,
-    simklAuthError: String? = null,
-    onDismiss: () -> Unit,
-    onConnect: (String) -> Unit,
-    onClearError: () -> Unit = {}
+fun TraktBrandWordmark(
+    emblemSize: Dp = 22.dp,
+    modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val uriHandler = LocalUriHandler.current
-    val clipboardManager = LocalClipboardManager.current
-    val haptic = LocalHapticFeedback.current
-    val isAmoled = LocalAmoledMode.current
-    val reduceMotion = LocalReduceMotion.current
-    val coroutineScope = rememberCoroutineScope()
-
-    var simklTokenInput by remember { mutableStateOf("") }
-    var isInputFocused by remember { mutableStateOf(false) }
-    var isVisible by remember { mutableStateOf(reduceMotion) }
-
-    // Error shake animation
-    val shakeOffset = remember { Animatable(0f) }
-    LaunchedEffect(simklAuthError) {
-        if (simklAuthError != null && !reduceMotion) {
-            shakeOffset.snapTo(0f)
-            shakeOffset.animateTo(
-                targetValue = 0f,
-                animationSpec = keyframes {
-                    durationMillis = 350
-                    0f at 0
-                    (-8f) at 50
-                    8f at 100
-                    (-6f) at 150
-                    6f at 200
-                    (-3f) at 250
-                    3f at 300
-                    0f at 350
-                }
-            )
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        isVisible = true
-    }
-
-    val cardScale by animateFloatAsState(
-        targetValue = if (isVisible) 1f else 0.94f,
-        animationSpec = if (reduceMotion) snap() else spring(dampingRatio = 0.80f, stiffness = 500f),
-        label = "simklDialogCardScale"
-    )
-    val cardAlpha by animateFloatAsState(
-        targetValue = if (isVisible) 1f else 0f,
-        animationSpec = if (reduceMotion) snap() else tween(durationMillis = 160, easing = LinearOutSlowInEasing),
-        label = "simklDialogCardAlpha"
-    )
-    val scrimAlpha by animateFloatAsState(
-        targetValue = if (isVisible) NetvioGlassTokens.ScrimAlpha else 0f,
-        animationSpec = if (reduceMotion) snap() else tween(durationMillis = 180, easing = LinearOutSlowInEasing),
-        label = "simklDialogScrimAlpha"
-    )
-
-    Dialog(
-        onDismissRequest = { if (!isSimklValidating) onDismiss() },
-        properties = DialogProperties(
-            dismissOnBackPress = true,
-            dismissOnClickOutside = true,
-            usePlatformDefaultWidth = false
-        )
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(9.dp)
     ) {
-        val view = LocalView.current
-        SideEffect {
-            val window = (view.parent as? DialogWindowProvider)?.window
-                ?: generateSequence(view.parent) { it.parent }
-                    .filterIsInstance<DialogWindowProvider>()
-                    .firstOrNull()?.window
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && window != null) {
-                window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
-                window.setDimAmount(0f)
-                val lp = window.attributes
-                lp.blurBehindRadius = 45
-                window.attributes = lp
-            }
-        }
-
-        val cardShape = RoundedCornerShape(NetvioGlassTokens.RadiusDialog)
-
-        // Animated Scrim
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = scrimAlpha))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = { if (!isSimklValidating) onDismiss() }
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            // Dialog Card
-            val windowDims = rememberWindowDimensions()
-            Box(
-                modifier = Modifier
-                    .adaptiveHorizontalSafePadding(baseStart = 16.dp, baseEnd = 16.dp, includeRailClearance = false)
-                    .widthIn(max = 410.dp)
-                    .fillMaxWidth()
-                    .heightIn(max = windowDims.dialogMaxHeight())
-                    .imePadding()
-                    .graphicsLayer {
-                        scaleX = cardScale
-                        scaleY = cardScale
-                        alpha = cardAlpha
-                    }
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = {} // Intercept clicks inside card
-                    )
-                    .netvioGlassCard(
-                        shape = cardShape,
-                        hazeState = hazeState,
-                        isAmoled = isAmoled
-                    )
-                    .padding(24.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    // Header Row with Simkl Wordmark Badge, Titles and Close Action
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Simkl Blue-White Gradient Wordmark Glass Tile
-                        Box(
-                            modifier = Modifier
-                                .height(44.dp)
-                                .clip(RoundedCornerShape(13.dp))
-                                .background(
-                                    Brush.linearGradient(
-                                        colors = listOf(
-                                            Color(0xFF38BDF8).copy(alpha = 0.14f),
-                                            Color.White.copy(alpha = 0.05f)
-                                        ),
-                                        start = Offset(0f, 0f),
-                                        end = Offset(160f, 120f)
-                                    )
-                                )
-                                .border(
-                                    NetvioGlassTokens.HairlineWidth,
-                                    Brush.linearGradient(
-                                        colors = listOf(
-                                            Color(0xFF7DD3FC).copy(alpha = 0.42f),
-                                            Color.White.copy(alpha = 0.14f)
-                                        )
-                                    ),
-                                    RoundedCornerShape(13.dp)
-                                )
-                                .padding(horizontal = 12.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            SimklGradientWordmark(height = 15.dp)
-                        }
-
-                        Spacer(modifier = Modifier.width(14.dp))
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Link Simkl",
-                                style = NetvioGlassTokens.HeaderTitle,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "OAuth 2.0 PKCE or personal token",
-                                style = NetvioGlassTokens.HeaderSubtitle.copy(
-                                    color = Color(0xFFD8F3FF).copy(alpha = 0.62f)
-                                )
-                            )
-                        }
-
-                        // Close "X" Button
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.06f))
-                                .border(
-                                    NetvioGlassTokens.HairlineWidth,
-                                    NetvioGlassTokens.HairlineBorder,
-                                    CircleShape
-                                )
-                                .pluginsPressable(
-                                    scaleDown = 0.94f,
-                                    onClick = {
-                                        if (!isSimklValidating) {
-                                            try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
-                                            onDismiss()
-                                        }
-                                    }
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Close,
-                                contentDescription = "Close dialog",
-                                tint = Color.White.copy(alpha = 0.75f),
-                                modifier = Modifier.size(17.dp)
-                            )
-                        }
-                    }
-
-                    // Hairline Divider
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(NetvioGlassTokens.HairlineWidth)
-                            .background(NetvioGlassTokens.HairlineDivider)
-                    )
-
-                    // Explanatory Body Copy (Unslopped: direct, factual, human)
-                    Text(
-                        text = "Sign in with Simkl in your browser to link automatically, or paste a redirect URL or token below if your browser does not hand back to the app.",
-                        style = NetvioGlassTokens.BodyText
-                    )
-
-                    // Step 1: OAuth 2.0 PKCE Browser Handshake
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        StepIndicatorBadge(stepNumber = 1, label = "Authorize in browser")
-
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(
-                                    Brush.linearGradient(
-                                        colors = listOf(
-                                            Color(0xFF38BDF8).copy(alpha = 0.11f),
-                                            Color.White.copy(alpha = 0.05f)
-                                        )
-                                    )
-                                )
-                                .border(
-                                    NetvioGlassTokens.HairlineWidth,
-                                    Brush.linearGradient(
-                                        colors = listOf(
-                                            Color(0xFF7DD3FC).copy(alpha = 0.34f),
-                                            NetvioGlassTokens.HairlineBorder
-                                        )
-                                    ),
-                                    RoundedCornerShape(16.dp)
-                                )
-                                .pluginsPressable(
-                                    scaleDown = 0.98f,
-                                    onClick = {
-                                        try {
-                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                            val authUrl = com.netvio.core.sync.simkl.SimklClient.getInstance().getAuthorizationUrl()
-                                            val verifier = com.netvio.core.sync.simkl.SimklClient.getInstance().pendingCodeVerifier
-                                            if (!verifier.isNullOrBlank()) {
-                                                context.getSharedPreferences("simkl_auth_prefs", android.content.Context.MODE_PRIVATE)
-                                                    .edit()
-                                                    .putString("pending_code_verifier", verifier)
-                                                    .commit()
-                                                coroutineScope.launch {
-                                                    com.netvio.data.preferences.PreferencesRepository.getInstance(context).setSimklCodeVerifier(verifier)
-                                                }
-                                            }
-                                            uriHandler.openUri(authUrl)
-                                        } catch (_: Exception) {}
-                                    }
-                                )
-                                .padding(horizontal = 16.dp, vertical = 13.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Open Simkl Authorization",
-                                        style = TextStyle(
-                                            fontFamily = AppFontFamily,
-                                            fontWeight = FontWeight.SemiBold,
-                                            fontSize = 14.sp,
-                                            color = Color.White
-                                        )
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = "Approve access on simkl.com to return to Netvio",
-                                        style = TextStyle(
-                                            fontFamily = AppFontFamily,
-                                            fontWeight = FontWeight.Normal,
-                                            fontSize = 12.sp,
-                                            color = Color(0xFFD8F3FF).copy(alpha = 0.64f)
-                                        )
-                                    )
-                                }
-                                Icon(
-                                    imageVector = Icons.Outlined.OpenInNew,
-                                    contentDescription = null,
-                                    tint = Color(0xFF7DD3FC),
-                                    modifier = Modifier.size(19.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    // Step 2: Code or Token Input Container
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        StepIndicatorBadge(stepNumber = 2, label = "Or paste redirect URL / token")
-                        val inputBorderColor by animateColorAsState(
-                            targetValue = when {
-                                isInputFocused -> Color.White.copy(alpha = 0.40f)
-                                simklTokenInput.isNotBlank() -> Color.White.copy(alpha = 0.24f)
-                                else -> NetvioGlassTokens.HairlineBorder
-                            },
-                            animationSpec = tween(durationMillis = 150),
-                            label = "simklInputBorder"
-                        )
-
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(Color.White.copy(alpha = 0.05f))
-                                .border(
-                                    NetvioGlassTokens.HairlineWidth,
-                                    inputBorderColor,
-                                    RoundedCornerShape(16.dp)
-                                )
-                                .padding(horizontal = 14.dp, vertical = 11.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Key,
-                                    contentDescription = null,
-                                    tint = Color.White.copy(alpha = 0.50f),
-                                    modifier = Modifier.size(19.dp)
-                                )
-
-                                Spacer(modifier = Modifier.width(10.dp))
-
-                                Box(modifier = Modifier.weight(1f)) {
-                                    if (simklTokenInput.isEmpty()) {
-                                        Text(
-                                            text = "Paste redirect URL, code, or token...",
-                                            style = TextStyle(
-                                                fontFamily = AppFontFamily,
-                                                fontWeight = FontWeight.Normal,
-                                                fontSize = 13.sp,
-                                                color = Color.White.copy(alpha = 0.38f)
-                                            ),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                    BasicTextField(
-                                        value = simklTokenInput,
-                                        onValueChange = {
-                                            val raw = it.trim()
-                                            val extracted = Regex("""code=([^&]+)""").find(raw)?.groupValues?.get(1) ?: raw
-                                            simklTokenInput = extracted
-                                            onClearError()
-                                        },
-                                        singleLine = true,
-                                        textStyle = TextStyle(
-                                            fontFamily = AppFontFamily,
-                                            fontWeight = FontWeight.Normal,
-                                            fontSize = 13.sp,
-                                            color = Color.White
-                                        ),
-                                        cursorBrush = SolidColor(Color.White),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .onFocusChanged { isInputFocused = it.isFocused }
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.width(8.dp))
-
-                                // Paste or Clear Button
-                                if (simklTokenInput.isNotBlank()) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .clip(CircleShape)
-                                            .background(Color.White.copy(alpha = 0.08f))
-                                            .pluginsPressable(
-                                                scaleDown = 0.90f,
-                                                onClick = {
-                                                    try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
-                                                    simklTokenInput = ""
-                                                    onClearError()
-                                                }
-                                            ),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.Close,
-                                            contentDescription = "Clear input",
-                                            tint = Color.White.copy(alpha = 0.70f),
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                } else {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(CircleShape)
-                                            .background(Color.White.copy(alpha = 0.09f))
-                                            .border(
-                                                NetvioGlassTokens.HairlineWidth,
-                                                NetvioGlassTokens.HairlineBorder,
-                                                CircleShape
-                                            )
-                                            .pluginsPressable(
-                                                scaleDown = 0.94f,
-                                                onClick = {
-                                                    val text = clipboardManager.getText()?.text
-                                                    if (!text.isNullOrBlank()) {
-                                                        val raw = text.trim()
-                                                        val extracted = Regex("""code=([^&]+)""").find(raw)?.groupValues?.get(1) ?: raw
-                                                        simklTokenInput = extracted
-                                                        onClearError()
-                                                        try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
-                                                    }
-                                                }
-                                            )
-                                            .padding(horizontal = 11.dp, vertical = 6.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Outlined.ContentPaste,
-                                                contentDescription = null,
-                                                tint = Color.White,
-                                                modifier = Modifier.size(13.dp)
-                                            )
-                                            Text(
-                                                text = "Paste",
-                                                style = TextStyle(
-                                                    fontFamily = AppFontFamily,
-                                                    fontWeight = FontWeight.Medium,
-                                                    fontSize = 11.5.sp,
-                                                    color = Color.White
-                                                )
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Inline Error Banner with Spring Shake
-                    AnimatedVisibility(
-                        visible = simklAuthError != null,
-                        enter = fadeIn(tween(150)),
-                        exit = fadeOut(tween(150))
-                    ) {
-                        if (simklAuthError != null) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .graphicsLayer { translationX = shakeOffset.value }
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(Color(0xFFE57373).copy(alpha = 0.12f))
-                                    .border(
-                                        NetvioGlassTokens.HairlineWidth,
-                                        Color(0xFFE57373).copy(alpha = 0.35f),
-                                        RoundedCornerShape(14.dp)
-                                    )
-                                    .padding(horizontal = 14.dp, vertical = 10.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.ErrorOutline,
-                                        contentDescription = null,
-                                        tint = Color(0xFFFF8A80),
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Text(
-                                        text = simklAuthError,
-                                        style = TextStyle(
-                                            fontFamily = AppFontFamily,
-                                            fontWeight = FontWeight.Normal,
-                                            fontSize = 12.5.sp,
-                                            lineHeight = 16.sp,
-                                            color = Color.White.copy(alpha = 0.92f)
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    // Dialog Actions Footer: Cancel on left, Connect on right
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        // Frosted Cancel Pill
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.08f))
-                                .border(
-                                    NetvioGlassTokens.HairlineWidth,
-                                    NetvioGlassTokens.HairlineBorder,
-                                    CircleShape
-                                )
-                                .pluginsPressable(
-                                    enabled = !isSimklValidating,
-                                    scaleDown = 0.97f,
-                                    onClick = {
-                                        try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
-                                        onDismiss()
-                                    }
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "Cancel",
-                                style = NetvioGlassTokens.SecondaryButtonText.copy(
-                                    color = Color.White.copy(alpha = 0.85f),
-                                    fontWeight = FontWeight.Medium
-                                )
-                            )
-                        }
-
-                        // Blue-and-White Gradient Connect Pill
-                        val canConnect = simklTokenInput.isNotBlank() && !isSimklValidating
-                        val connectBrush = Brush.horizontalGradient(
-                            colors = if (canConnect) {
-                                listOf(Color.White, Color(0xFFD8F3FF), Color(0xFF7DD3FC))
-                            } else {
-                                listOf(
-                                    Color.White.copy(alpha = 0.35f),
-                                    Color(0xFFBAE6FD).copy(alpha = 0.28f)
-                                )
-                            }
-                        )
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .clip(CircleShape)
-                                .background(connectBrush, CircleShape)
-                                .pluginsPressable(
-                                    enabled = canConnect,
-                                    scaleDown = 0.97f,
-                                    onClick = {
-                                        val token = simklTokenInput.trim()
-                                        if (token.isNotBlank()) {
-                                            try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
-                                            onConnect(token)
-                                        }
-                                    }
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (isSimklValidating) {
-                                CircularProgressIndicator(
-                                    strokeWidth = 2.dp,
-                                    color = NetvioGlassTokens.TextDark,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            } else {
-                                Text(
-                                    text = "Connect",
-                                    style = NetvioGlassTokens.PrimaryButtonText.copy(
-                                        color = if (canConnect) NetvioGlassTokens.TextDark else NetvioGlassTokens.TextDark.copy(alpha = 0.50f)
-                                    )
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        TraktBrandEmblem(size = emblemSize)
+        Text(
+            text = "Trakt",
+            style = TextStyle(
+                fontFamily = AppFontFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 18.sp,
+                lineHeight = 22.sp,
+                letterSpacing = (-0.02).em,
+                color = NetvioGlassTokens.TextWhite96
+            ),
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
 /**
- * Renders the Simkl wordmark (`SIMKL™`) extracted from the brand mark with a crisp
- * white-to-electric-blue linear gradient (`#FFFFFF` -> `#D8F3FF` -> `#38BDF8`) using
- * offscreen alpha compositing (`BlendMode.SrcIn`) so it stays razor-sharp on dark/AMOLED glass.
+ * Simkl wordmark with its signature white-to-sky-blue gradient.
  */
 @Composable
 fun SimklGradientWordmark(
@@ -1329,6 +231,642 @@ fun SimklGradientWordmark(
                 }
             }
     )
+}
+
+@Composable
+fun TraktConnectDialog(
+    hazeState: HazeState? = null,
+    isTraktValidating: Boolean = false,
+    traktAuthError: String? = null,
+    onDismiss: () -> Unit,
+    onConnect: (String) -> Unit,
+    onClearError: () -> Unit = {}
+) {
+    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    val coroutineScope = rememberCoroutineScope()
+
+    val spec = remember {
+        OAuthTrackerDialogSpec(
+            trackerName = "Trakt",
+            subtitle = "Link Trakt • OAuth 2.0 PKCE",
+            browserHelperCopy = "Sign in on Trakt in your browser to automatically return and authorize Netvio.",
+            inputLabel = "Or paste redirect URL / code",
+            inputPlaceholder = "Paste redirect URL or code…",
+            accentColor = Color(0xFFED1C24),
+            headerBrandMark = { TraktBrandWordmark(emblemSize = 20.dp) }
+        )
+    }
+
+    OAuthTrackerConnectDialog(
+        spec = spec,
+        hazeState = hazeState,
+        isValidating = isTraktValidating,
+        authError = traktAuthError,
+        onLaunchBrowser = {
+            val authUrl = TraktClient.getInstance().getAuthorizationUrl()
+            val verifier = TraktClient.getInstance().pendingCodeVerifier
+            if (!verifier.isNullOrBlank()) {
+                context.getSharedPreferences("trakt_auth_prefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("pending_code_verifier", verifier)
+                    .commit()
+                coroutineScope.launch {
+                    PreferencesRepository.getInstance(context).setTraktCodeVerifier(verifier)
+                }
+            }
+            uriHandler.openUri(authUrl)
+        },
+        onDismiss = onDismiss,
+        onConnect = onConnect,
+        onClearError = onClearError
+    )
+}
+
+@Composable
+fun SimklConnectDialog(
+    hazeState: HazeState? = null,
+    isSimklValidating: Boolean = false,
+    simklAuthError: String? = null,
+    onDismiss: () -> Unit,
+    onConnect: (String) -> Unit,
+    onClearError: () -> Unit = {}
+) {
+    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    val coroutineScope = rememberCoroutineScope()
+
+    val spec = remember {
+        OAuthTrackerDialogSpec(
+            trackerName = "Simkl",
+            subtitle = "Link Simkl • OAuth 2.0 PKCE",
+            browserHelperCopy = "Authorize Simkl in your browser to return automatically with your session.",
+            inputLabel = "Or paste redirect URL / code",
+            inputPlaceholder = "Paste redirect URL or code…",
+            accentColor = Color(0xFF38BDF8),
+            headerBrandMark = { SimklGradientWordmark(height = 17.dp) }
+        )
+    }
+
+    OAuthTrackerConnectDialog(
+        spec = spec,
+        hazeState = hazeState,
+        isValidating = isSimklValidating,
+        authError = simklAuthError,
+        onLaunchBrowser = {
+            val authUrl = SimklClient.getInstance().getAuthorizationUrl()
+            val verifier = SimklClient.getInstance().pendingCodeVerifier
+            if (!verifier.isNullOrBlank()) {
+                context.getSharedPreferences("simkl_auth_prefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("pending_code_verifier", verifier)
+                    .commit()
+                coroutineScope.launch {
+                    PreferencesRepository.getInstance(context).setSimklCodeVerifier(verifier)
+                }
+            }
+            uriHandler.openUri(authUrl)
+        },
+        onDismiss = onDismiss,
+        onConnect = onConnect,
+        onClearError = onClearError
+    )
+}
+
+@Composable
+private fun OAuthTrackerConnectDialog(
+    spec: OAuthTrackerDialogSpec,
+    hazeState: HazeState?,
+    isValidating: Boolean,
+    authError: String?,
+    onLaunchBrowser: () -> Unit,
+    onDismiss: () -> Unit,
+    onConnect: (String) -> Unit,
+    onClearError: () -> Unit
+) {
+    val isAmoled = LocalAmoledMode.current
+    val reduceMotion = LocalReduceMotion.current
+    val clipboardManager = LocalClipboardManager.current
+    val haptic = LocalHapticFeedback.current
+
+    var tokenInput by remember { mutableStateOf("") }
+    var isInputFocused by remember { mutableStateOf(false) }
+
+    var entered by remember { mutableStateOf(reduceMotion) }
+    LaunchedEffect(Unit) {
+        entered = true
+    }
+
+    val cardScale by animateFloatAsState(
+        targetValue = if (entered) 1f else 0.95f,
+        animationSpec = if (reduceMotion) {
+            snap()
+        } else {
+            spring(dampingRatio = 1.0f, stiffness = 460f)
+        },
+        label = "oauthDialogScale"
+    )
+    val cardAlpha by animateFloatAsState(
+        targetValue = if (entered) 1f else 0f,
+        animationSpec = if (reduceMotion) {
+            snap()
+        } else {
+            tween(durationMillis = 160, easing = LinearOutSlowInEasing)
+        },
+        label = "oauthDialogAlpha"
+    )
+
+    val shakeOffset = remember { Animatable(0f) }
+    LaunchedEffect(authError) {
+        if (!authError.isNullOrBlank() && !reduceMotion) {
+            for (delta in listOf(-8f, 8f, -5f, 5f, -2f, 0f)) {
+                shakeOffset.animateTo(
+                    targetValue = delta,
+                    animationSpec = tween(durationMillis = 36)
+                )
+            }
+        } else {
+            shakeOffset.snapTo(0f)
+        }
+    }
+
+    val inputBorderColor by animateColorAsState(
+        targetValue = when {
+            !authError.isNullOrBlank() -> Color(0xFFEF4444).copy(alpha = 0.65f)
+            isInputFocused -> Color.White.copy(alpha = 0.42f)
+            else -> NetvioGlassTokens.HairlineBorder
+        },
+        animationSpec = if (reduceMotion) snap() else tween(durationMillis = 150),
+        label = "oauthInputBorder"
+    )
+
+    val extractAndSubmit = {
+        val raw = tokenInput.trim()
+        if (raw.isNotEmpty() && !isValidating) {
+            val code = Regex("""code=([^&#]+)""").find(raw)?.groupValues?.get(1) ?: raw
+            onConnect(code)
+        }
+    }
+
+    Dialog(
+        onDismissRequest = { if (!isValidating) onDismiss() },
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
+    ) {
+        ApplyWindowBlurEffect(blurRadiusPx = 56)
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = NetvioGlassTokens.ScrimAlpha))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    enabled = !isValidating,
+                    onClick = onDismiss
+                )
+                .imePadding()
+                .adaptiveHorizontalSafePadding(
+                    baseStart = 20.dp,
+                    baseEnd = 20.dp,
+                    includeRailClearance = false
+                )
+                .padding(vertical = 24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 440.dp)
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        scaleX = cardScale
+                        scaleY = cardScale
+                        alpha = cardAlpha
+                        translationX = shakeOffset.value
+                    }
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {}
+                    )
+                    .netvioGlassCard(
+                        shape = RoundedCornerShape(NetvioGlassTokens.RadiusDialog),
+                        hazeState = hazeState,
+                        isAmoled = isAmoled,
+                        borderWidth = NetvioGlassTokens.HairlineWidth,
+                        borderColor = NetvioGlassTokens.HairlineBorder
+                    )
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 22.dp, vertical = 20.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        spec.headerBrandMark()
+                        Text(
+                            text = spec.subtitle,
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontWeight = FontWeight.Normal,
+                                fontSize = 12.5.sp,
+                                lineHeight = 16.sp,
+                                color = NetvioGlassTokens.TextWhite54
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .pluginsPressable(
+                                enabled = !isValidating,
+                                scaleDown = 0.94f,
+                                onClick = onDismiss
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.08f))
+                                .border(
+                                    width = NetvioGlassTokens.HairlineWidth,
+                                    color = NetvioGlassTokens.HairlineBorder,
+                                    shape = CircleShape
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Close,
+                                contentDescription = "Close ${spec.trackerName} sign-in",
+                                tint = NetvioGlassTokens.TextWhite82,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                StepIndicatorBadge(stepNumber = 1, label = "Authorize in browser")
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = 48.dp)
+                        .clip(RoundedCornerShape(NetvioGlassTokens.RadiusPill))
+                        .background(Color.White)
+                        .pluginsPressable(
+                            enabled = !isValidating,
+                            scaleDown = 0.97f,
+                            pressedAlpha = 0.90f,
+                            role = Role.Button,
+                            onClick = onLaunchBrowser
+                        )
+                        .padding(horizontal = 18.dp, vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.OpenInNew,
+                            contentDescription = null,
+                            tint = NetvioGlassTokens.TextDark,
+                            modifier = Modifier.size(17.dp)
+                        )
+                        Text(
+                            text = "Continue in browser",
+                            style = NetvioGlassTokens.PrimaryButtonText
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = spec.browserHelperCopy,
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Normal,
+                        fontSize = 12.5.sp,
+                        lineHeight = 18.sp,
+                        color = NetvioGlassTokens.TextWhite54
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                HorizontalDivider(
+                    thickness = NetvioGlassTokens.HairlineWidth,
+                    color = NetvioGlassTokens.HairlineDivider
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                StepIndicatorBadge(stepNumber = 2, label = "Paste redirect URL or code")
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = spec.inputLabel,
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 12.5.sp,
+                        lineHeight = 17.sp,
+                        color = NetvioGlassTokens.TextWhite72
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = 48.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.White.copy(alpha = 0.05f))
+                        .border(
+                            width = if (isInputFocused || !authError.isNullOrBlank()) 1.dp else NetvioGlassTokens.HairlineWidth,
+                            color = inputBorderColor,
+                            shape = RoundedCornerShape(14.dp)
+                        )
+                        .padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        if (tokenInput.isEmpty()) {
+                            Text(
+                                text = spec.inputPlaceholder,
+                                style = TextStyle(
+                                    fontFamily = AppFontFamily,
+                                    fontWeight = FontWeight.Normal,
+                                    fontSize = 13.5.sp,
+                                    color = NetvioGlassTokens.TextWhite42
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        BasicTextField(
+                            value = tokenInput,
+                            onValueChange = { updated ->
+                                tokenInput = updated
+                                if (!authError.isNullOrBlank()) {
+                                    onClearError()
+                                }
+                            },
+                            enabled = !isValidating,
+                            singleLine = true,
+                            textStyle = TextStyle(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Normal,
+                                fontSize = 13.sp,
+                                color = NetvioGlassTokens.TextWhite96
+                            ),
+                            cursorBrush = SolidColor(spec.accentColor),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { isInputFocused = it.isFocused }
+                        )
+                    }
+
+                    if (tokenInput.isNotEmpty() && !isValidating) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .pluginsPressable(
+                                    scaleDown = 0.94f,
+                                    onClick = {
+                                        tokenInput = ""
+                                        if (!authError.isNullOrBlank()) {
+                                            onClearError()
+                                        }
+                                    }
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Close,
+                                contentDescription = "Clear field",
+                                tint = NetvioGlassTokens.TextWhite54,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .defaultMinSize(minHeight = 34.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha = 0.09f))
+                            .border(
+                                width = NetvioGlassTokens.HairlineWidth,
+                                color = Color.White.copy(alpha = 0.14f),
+                                shape = RoundedCornerShape(10.dp)
+                            )
+                            .pluginsPressable(
+                                enabled = !isValidating,
+                                scaleDown = 0.96f,
+                                onClick = {
+                                    val pasted = clipboardManager.getText()?.text?.trim()
+                                    if (!pasted.isNullOrEmpty()) {
+                                        tokenInput = pasted
+                                        if (!authError.isNullOrBlank()) {
+                                            onClearError()
+                                        }
+                                        try {
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        } catch (_: Exception) {}
+                                    }
+                                }
+                            )
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.ContentPaste,
+                            contentDescription = "Paste code",
+                            tint = NetvioGlassTokens.TextWhite82,
+                            modifier = Modifier.size(13.5.dp)
+                        )
+                        Text(
+                            text = "Paste",
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 12.sp,
+                                color = NetvioGlassTokens.TextWhite82
+                            )
+                        )
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = !authError.isNullOrBlank(),
+                    enter = if (reduceMotion) {
+                        fadeIn(snap())
+                    } else {
+                        expandVertically(spring(dampingRatio = 1.0f, stiffness = 440f)) +
+                            fadeIn(tween(durationMillis = 160, easing = LinearOutSlowInEasing))
+                    },
+                    exit = if (reduceMotion) {
+                        fadeOut(snap())
+                    } else {
+                        shrinkVertically(spring(dampingRatio = 1.0f, stiffness = 460f)) +
+                            fadeOut(tween(durationMillis = 120))
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFFEF4444).copy(alpha = 0.12f))
+                            .border(
+                                width = NetvioGlassTokens.HairlineWidth,
+                                color = Color(0xFFEF4444).copy(alpha = 0.34f),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.ErrorOutline,
+                            contentDescription = null,
+                            tint = Color(0xFFFCA5A5),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = authError.orEmpty(),
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontWeight = FontWeight.Normal,
+                                fontSize = 12.5.sp,
+                                lineHeight = 17.sp,
+                                color = Color(0xFFFECACA)
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                val canSubmit = tokenInput.trim().isNotEmpty() && !isValidating
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(0.40f)
+                            .defaultMinSize(minHeight = 48.dp)
+                            .clip(RoundedCornerShape(NetvioGlassTokens.RadiusPill))
+                            .background(Color.White.copy(alpha = 0.08f))
+                            .border(
+                                width = NetvioGlassTokens.HairlineWidth,
+                                color = NetvioGlassTokens.HairlineBorder,
+                                shape = RoundedCornerShape(NetvioGlassTokens.RadiusPill)
+                            )
+                            .pluginsPressable(
+                                enabled = !isValidating,
+                                scaleDown = 0.97f,
+                                role = Role.Button,
+                                onClick = onDismiss
+                            )
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Cancel",
+                            style = NetvioGlassTokens.SecondaryButtonText,
+                            maxLines = 1
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(0.60f)
+                            .defaultMinSize(minHeight = 48.dp)
+                            .clip(RoundedCornerShape(NetvioGlassTokens.RadiusPill))
+                            .background(
+                                if (canSubmit || isValidating) {
+                                    Color.White
+                                } else {
+                                    Color.White.copy(alpha = 0.14f)
+                                }
+                            )
+                            .pluginsPressable(
+                                enabled = canSubmit,
+                                scaleDown = 0.97f,
+                                pressedAlpha = 0.90f,
+                                role = Role.Button,
+                                onClick = extractAndSubmit
+                            )
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isValidating) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    color = NetvioGlassTokens.TextDark,
+                                    strokeWidth = 2.dp
+                                )
+                                Text(
+                                    text = "Verifying…",
+                                    style = NetvioGlassTokens.PrimaryButtonText,
+                                    maxLines = 1
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = "Verify & link",
+                                style = TextStyle(
+                                    fontFamily = AppFontFamily,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 14.5.sp,
+                                    color = if (canSubmit) {
+                                        NetvioGlassTokens.TextDark
+                                    } else {
+                                        NetvioGlassTokens.TextWhite42
+                                    }
+                                ),
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /**

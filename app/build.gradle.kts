@@ -14,8 +14,8 @@ android {
         applicationId = "com.netvio"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12
-        versionName = "1.2.0-Stable"
+        versionCode = 13
+        versionName = "1.3.0-Stable"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

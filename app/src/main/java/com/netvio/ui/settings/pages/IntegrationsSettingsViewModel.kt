@@ -15,6 +15,9 @@ class IntegrationsSettingsViewModel(application: Application) : AndroidViewModel
     private val prefs = PreferencesRepository.getInstance(application)
     private val syncManager = MediaSyncManager.getInstance(application)
 
+    private val _traktAccessToken = MutableStateFlow("")
+    val traktAccessToken: StateFlow<String> = _traktAccessToken.asStateFlow()
+
     private val _traktUsername = MutableStateFlow("")
     val traktUsername: StateFlow<String> = _traktUsername.asStateFlow()
 
@@ -48,8 +51,20 @@ class IntegrationsSettingsViewModel(application: Application) : AndroidViewModel
     private val _lastSyncTimestamp = MutableStateFlow(0L)
     val lastSyncTimestamp: StateFlow<Long> = _lastSyncTimestamp.asStateFlow()
 
+    private val _traktLastSyncTimestamp = MutableStateFlow(0L)
+    val traktLastSyncTimestamp: StateFlow<Long> = _traktLastSyncTimestamp.asStateFlow()
+
+    private val _simklLastSyncTimestamp = MutableStateFlow(0L)
+    val simklLastSyncTimestamp: StateFlow<Long> = _simklLastSyncTimestamp.asStateFlow()
+
     val isSyncing: StateFlow<Boolean> = syncManager.isSyncing
+    val isTraktSyncing: StateFlow<Boolean> = syncManager.isTraktSyncing
+    val isSimklSyncing: StateFlow<Boolean> = syncManager.isSimklSyncing
     val syncStatusMessage: StateFlow<String?> = syncManager.syncStatusMessage
+    val traktStatusMessage: StateFlow<String?> = syncManager.traktStatusMessage
+    val simklStatusMessage: StateFlow<String?> = syncManager.simklStatusMessage
+    val traktSyncError: StateFlow<String?> = syncManager.traktSyncError
+    val simklSyncError: StateFlow<String?> = syncManager.simklSyncError
 
     private val _realDebridApiKey = MutableStateFlow("")
     val realDebridApiKey: StateFlow<String> = _realDebridApiKey.asStateFlow()
@@ -67,6 +82,7 @@ class IntegrationsSettingsViewModel(application: Application) : AndroidViewModel
     val debridEnabled: StateFlow<Boolean> = _debridEnabled.asStateFlow()
 
     init {
+        viewModelScope.launch { prefs.traktAccessToken.collect { _traktAccessToken.value = it } }
         viewModelScope.launch { prefs.traktUsername.collect { _traktUsername.value = it } }
         viewModelScope.launch { prefs.traktScrobbleEnabled.collect { _traktScrobbleEnabled.value = it } }
         viewModelScope.launch { prefs.traktSyncWatchlist.collect { _traktSyncWatchlist.value = it } }
@@ -80,6 +96,8 @@ class IntegrationsSettingsViewModel(application: Application) : AndroidViewModel
         viewModelScope.launch { prefs.simklSyncHistory.collect { _simklSyncHistory.value = it } }
 
         viewModelScope.launch { prefs.lastMediaSyncTimestamp.collect { _lastSyncTimestamp.value = it } }
+        viewModelScope.launch { prefs.traktLastSyncTimestamp.collect { _traktLastSyncTimestamp.value = it } }
+        viewModelScope.launch { prefs.simklLastSyncTimestamp.collect { _simklLastSyncTimestamp.value = it } }
 
         viewModelScope.launch { prefs.realDebridApiKey.collect { _realDebridApiKey.value = it } }
         viewModelScope.launch { prefs.allDebridApiKey.collect { _allDebridApiKey.value = it } }
@@ -91,6 +109,18 @@ class IntegrationsSettingsViewModel(application: Application) : AndroidViewModel
     fun triggerSyncNow() {
         viewModelScope.launch {
             syncManager.syncAll(force = true)
+        }
+    }
+
+    fun triggerTraktSyncNow() {
+        viewModelScope.launch {
+            syncManager.syncTraktNow()
+        }
+    }
+
+    fun triggerSimklSyncNow() {
+        viewModelScope.launch {
+            syncManager.syncSimklNow()
         }
     }
 
@@ -160,12 +190,13 @@ class IntegrationsSettingsViewModel(application: Application) : AndroidViewModel
     }
 
     fun setTraktAuth(accessToken: String, refreshToken: String, username: String) {
+        _traktAccessToken.value = accessToken
         _traktUsername.value = username
         _traktScrobbleEnabled.value = true
         viewModelScope.launch {
             prefs.setTraktAuth(accessToken, refreshToken, username)
             prefs.setTraktScrobbleEnabled(true)
-            syncManager.syncAll(force = true)
+            syncManager.syncTraktNow()
         }
     }
 
@@ -175,11 +206,13 @@ class IntegrationsSettingsViewModel(application: Application) : AndroidViewModel
         viewModelScope.launch {
             prefs.setSimklAuth(token)
             prefs.setSimklScrobbleEnabled(true)
-            syncManager.syncAll(force = true)
+            syncManager.syncSimklNow()
         }
     }
 
     fun disconnectTrakt() {
+        syncManager.notifyTraktDisconnected()
+        _traktAccessToken.value = ""
         _traktUsername.value = ""
         _traktScrobbleEnabled.value = false
         viewModelScope.launch {
@@ -189,6 +222,7 @@ class IntegrationsSettingsViewModel(application: Application) : AndroidViewModel
     }
 
     fun disconnectSimkl() {
+        syncManager.notifySimklDisconnected()
         _simklAccessToken.value = ""
         _simklScrobbleEnabled.value = false
         viewModelScope.launch {

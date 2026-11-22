@@ -63,6 +63,9 @@ class PlaybackSettingsViewModel(application: Application) : AndroidViewModel(app
     private val _audioPassthrough = MutableStateFlow(false)
     val audioPassthrough: StateFlow<Boolean> = _audioPassthrough.asStateFlow()
 
+    private val _p2pStreamsEnabled = MutableStateFlow(com.netvio.core.p2p.P2pSettingsRepository.isP2pEnabled())
+    val p2pStreamsEnabled: StateFlow<Boolean> = _p2pStreamsEnabled.asStateFlow()
+
     init {
         viewModelScope.launch { prefs.defaultQuality.collect { _defaultQuality.value = it } }
         viewModelScope.launch { prefs.autoPlayNextEpisode.collect { _autoPlayNext.value = it } }
@@ -80,6 +83,7 @@ class PlaybackSettingsViewModel(application: Application) : AndroidViewModel(app
         viewModelScope.launch { prefs.hardwareAccelerationEnabled.collect { _hardwareAcceleration.value = it } }
         viewModelScope.launch { prefs.smartFailoverEnabled.collect { _smartFailover.value = it } }
         viewModelScope.launch { prefs.audioPassthroughEnabled.collect { _audioPassthrough.value = it } }
+        viewModelScope.launch { prefs.p2pStreamsEnabled.collect { _p2pStreamsEnabled.value = it } }
     }
 
     fun setDefaultQuality(quality: String) {
@@ -162,12 +166,25 @@ class PlaybackSettingsViewModel(application: Application) : AndroidViewModel(app
         viewModelScope.launch { prefs.setAudioPassthroughEnabled(enabled) }
     }
 
+    fun setP2pStreamsEnabled(enabled: Boolean) {
+        _p2pStreamsEnabled.value = enabled
+        viewModelScope.launch {
+            prefs.setP2pStreamsEnabled(enabled)
+            com.netvio.core.p2p.P2pSettingsRepository.setP2pEnabled(enabled)
+            com.netvio.core.streams.StreamsRepository.clear()
+            if (!enabled) {
+                com.netvio.core.p2p.P2pStreamingEngine.shutdownForDisable()
+            }
+        }
+    }
+
     fun resetDefaults() {
         setDefaultQuality("Auto")
         setBufferSizeMb(50)
         setHardwareAcceleration(true)
         setSmartFailover(false)
         setAudioPassthrough(false)
+        setP2pStreamsEnabled(true)
         setSeekInterval(10)
         setAutoPlayNext(true)
         setAutoSkipIntro(false)

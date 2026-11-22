@@ -20,7 +20,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.Key
@@ -57,6 +56,7 @@ import com.netvio.ui.theme.LocalAmoledMode
 import kotlinx.coroutines.delay
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -99,6 +99,7 @@ fun IntegrationsSettingsPage(
     val clipboardManager = LocalClipboardManager.current
     val reduceMotion = LocalReduceMotion.current
 
+    val traktToken by viewModel.traktAccessToken.collectAsState()
     val traktUsername by viewModel.traktUsername.collectAsState()
     val traktScrobble by viewModel.traktScrobbleEnabled.collectAsState()
     val traktSyncWatchlist by viewModel.traktSyncWatchlist.collectAsState()
@@ -111,9 +112,14 @@ fun IntegrationsSettingsPage(
     val simklSyncWatchlist by viewModel.simklSyncWatchlist.collectAsState()
     val simklSyncHistory by viewModel.simklSyncHistory.collectAsState()
 
-    val lastSyncTimestamp by viewModel.lastSyncTimestamp.collectAsState()
-    val isSyncing by viewModel.isSyncing.collectAsState()
-    val syncStatusMessage by viewModel.syncStatusMessage.collectAsState()
+    val traktLastSyncTimestamp by viewModel.traktLastSyncTimestamp.collectAsState()
+    val simklLastSyncTimestamp by viewModel.simklLastSyncTimestamp.collectAsState()
+    val isTraktSyncing by viewModel.isTraktSyncing.collectAsState()
+    val isSimklSyncing by viewModel.isSimklSyncing.collectAsState()
+    val traktStatusMessage by viewModel.traktStatusMessage.collectAsState()
+    val simklStatusMessage by viewModel.simklStatusMessage.collectAsState()
+    val traktSyncError by viewModel.traktSyncError.collectAsState()
+    val simklSyncError by viewModel.simklSyncError.collectAsState()
     val debridEnabled by viewModel.debridEnabled.collectAsState()
     val activeDebridProvider by viewModel.activeDebridProvider.collectAsState()
     val rdKey by viewModel.realDebridApiKey.collectAsState()
@@ -131,11 +137,22 @@ fun IntegrationsSettingsPage(
     val uriHandler = LocalUriHandler.current
     val context = LocalContext.current
 
-    // Trakt Maintenance gate state (production Client ID / Secret pending)
-    var showTraktMaintenanceDialog by remember { mutableStateOf(false) }
+    // Trakt PKCE Connect states
+    var showTraktConnectDialog by remember { mutableStateOf(false) }
+    var isTraktValidating by remember { mutableStateOf(false) }
+    var traktAuthError by remember { mutableStateOf<String?>(null) }
 
     val openTraktConnect: () -> Unit = {
-        showTraktMaintenanceDialog = true
+        traktAuthError = null
+        isTraktValidating = false
+        showTraktConnectDialog = true
+    }
+
+    LaunchedEffect(traktToken, traktUsername) {
+        if (traktToken.isNotBlank() || traktUsername.isNotBlank()) {
+            showTraktConnectDialog = false
+            isTraktValidating = false
+        }
     }
 
     // Simkl Connect states
@@ -152,6 +169,7 @@ fun IntegrationsSettingsPage(
     LaunchedEffect(simklToken) {
         if (simklToken.isNotBlank()) {
             showSimklConnectDialog = false
+            isSimklValidating = false
         }
     }
 
@@ -434,24 +452,13 @@ fun IntegrationsSettingsPage(
         OpenSettingsSectionHeader(title = "Simkl Watchlist & History")
 
         val isSimklConnected = simklToken.isNotBlank()
-        val simklSyncTelemetry = remember(isSimklConnected, isSyncing, syncStatusMessage, lastSyncTimestamp) {
+        val simklSyncTelemetry = remember(isSimklConnected, isSimklSyncing, simklStatusMessage, simklLastSyncTimestamp) {
             when {
                 !isSimklConnected -> "Automatic episode scrobbling, watchlist sync, and watch history for anime, series, and movies."
-                isSyncing -> syncStatusMessage ?: "Syncing watchlist and episode history with Simkl..."
-                lastSyncTimestamp > 0L -> {
-                    val diff = System.currentTimeMillis() - lastSyncTimestamp
-                    val mins = (diff / 60000L).coerceAtLeast(0L)
-                    val timeLabel = when {
-                        mins < 1L -> "just now"
-                        mins < 60L -> "$mins min${if (mins == 1L) "" else "s"} ago"
-                        else -> {
-                            val hours = mins / 60L
-                            "$hours hr${if (hours == 1L) "" else "s"} ago"
-                        }
-                    }
-                    "Last synced $timeLabel • Automatic scrobbling and two-way library sync active."
-                }
-                else -> "Account linked • Ready to sync your watchlist and playback history."
+                isSimklSyncing -> simklStatusMessage ?: "Syncing watchlist and episode history with Simkl…"
+                simklLastSyncTimestamp > 0L ->
+                    "Last synced ${formatRelativeSyncTime(simklLastSyncTimestamp)} • Two-way scrobbling and watchlist sync active."
+                else -> "Account linked • Ready to sync watchlist and episode history."
             }
         }
 
@@ -460,12 +467,15 @@ fun IntegrationsSettingsPage(
         SimklSyncSectionCard(
             isConnected = isSimklConnected,
             isValidating = isSimklValidating,
-            isSyncing = isSyncing,
+            isSyncing = isSimklSyncing,
+            capabilitySummary = "Watchlist · Watch history · Anime",
+            statusConnectedLabel = "Linked",
             telemetryText = simklSyncTelemetry,
+            syncError = if (isSimklConnected) simklSyncError else null,
             hazeState = hazeState,
             onConnectClick = openSimklConnect,
             onSyncNowClick = {
-                viewModel.triggerSyncNow()
+                viewModel.triggerSimklSyncNow()
                 try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
             },
             onDisconnectClick = { showDisconnectSimklDialog = true }
@@ -473,8 +483,18 @@ fun IntegrationsSettingsPage(
 
         AnimatedVisibility(
             visible = isSimklConnected,
-            enter = if (reduceMotion) fadeIn(snap()) else expandVertically(spring(dampingRatio = 0.82f, stiffness = 380f)) + fadeIn(tween(180)),
-            exit = if (reduceMotion) fadeOut(snap()) else shrinkVertically(spring(dampingRatio = 0.82f, stiffness = 380f)) + fadeOut(tween(180))
+            enter = if (reduceMotion) {
+                fadeIn(snap())
+            } else {
+                expandVertically(spring(dampingRatio = 1.0f, stiffness = 440f)) +
+                    fadeIn(tween(160, easing = androidx.compose.animation.core.LinearOutSlowInEasing))
+            },
+            exit = if (reduceMotion) {
+                fadeOut(snap())
+            } else {
+                shrinkVertically(spring(dampingRatio = 1.0f, stiffness = 460f)) +
+                    fadeOut(tween(120))
+            }
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 OpenSettingsToggleRow(
@@ -503,33 +523,143 @@ fun IntegrationsSettingsPage(
             }
         }
 
-        // Section 3: Trakt.tv Tracking (Currently Under Maintenance)
+        // Section 3: Trakt.tv Tracking
         OpenSettingsSectionHeader(title = "Trakt.tv Tracking")
 
-        OpenSettingsRow(
-            title = "Trakt.tv account",
-            subtitle = "Temporarily unavailable while under maintenance",
-            onClick = openTraktConnect,
-            trailingContent = {
-                SettingsPillButton(
-                    text = "Maintenance",
-                    onClick = openTraktConnect,
+        val isTraktConnected = traktToken.isNotBlank() || traktUsername.isNotBlank()
+        val displayTraktUsername = traktUsername.ifBlank { "Trakt User" }
+        val traktSyncTelemetry = remember(isTraktConnected, isTraktSyncing, traktStatusMessage, traktLastSyncTimestamp) {
+            when {
+                !isTraktConnected -> "Automatic episode scrobbling, two-way watchlist sync, resume points, watch history, and custom lists."
+                isTraktSyncing -> traktStatusMessage ?: "Syncing watchlist, resume points, and history with Trakt…"
+                traktLastSyncTimestamp > 0L ->
+                    "Last synced ${formatRelativeSyncTime(traktLastSyncTimestamp)} • Resume points and scrobbling active."
+                else -> "Ready to sync watchlist, resume points, and watch history."
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        TraktSyncSectionCard(
+            isConnected = isTraktConnected,
+            isValidating = isTraktValidating,
+            isSyncing = isTraktSyncing,
+            capabilitySummary = "Watchlist · Resume points · History · Lists",
+            statusConnectedLabel = "@$displayTraktUsername",
+            telemetryText = traktSyncTelemetry,
+            syncError = if (isTraktConnected) traktSyncError else null,
+            hazeState = hazeState,
+            onConnectClick = openTraktConnect,
+            onSyncNowClick = {
+                viewModel.triggerTraktSyncNow()
+                try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
+            },
+            onDisconnectClick = { showDisconnectTraktDialog = true }
+        )
+
+        AnimatedVisibility(
+            visible = isTraktConnected,
+            enter = if (reduceMotion) {
+                fadeIn(snap())
+            } else {
+                expandVertically(spring(dampingRatio = 1.0f, stiffness = 440f)) +
+                    fadeIn(tween(160, easing = androidx.compose.animation.core.LinearOutSlowInEasing))
+            },
+            exit = if (reduceMotion) {
+                fadeOut(snap())
+            } else {
+                shrinkVertically(spring(dampingRatio = 1.0f, stiffness = 460f)) +
+                    fadeOut(tween(120))
+            }
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                OpenSettingsToggleRow(
+                    title = "Live scrobbling",
+                    subtitle = "Send playback progress & mark watched automatically",
+                    checked = traktScrobble,
+                    onCheckedChange = { viewModel.setTraktScrobble(it) },
+                    hazeState = hazeState
+                )
+
+                OpenSettingsToggleRow(
+                    title = "Watchlist two-way sync",
+                    subtitle = "Keep bookmarks synchronized between Netvio and Trakt",
+                    checked = traktSyncWatchlist,
+                    onCheckedChange = { viewModel.setTraktSyncWatchlist(it) },
+                    hazeState = hazeState
+                )
+
+                OpenSettingsToggleRow(
+                    title = "Resume points sync",
+                    subtitle = "Synchronize Continue Watching progress with Trakt playback",
+                    checked = traktSyncPlayback,
+                    onCheckedChange = { viewModel.setTraktSyncPlayback(it) },
+                    hazeState = hazeState
+                )
+
+                OpenSettingsToggleRow(
+                    title = "Watch history sync",
+                    subtitle = "Sync completed watch history and badges with your profile",
+                    checked = traktSyncHistory,
+                    onCheckedChange = { viewModel.setTraktSyncHistory(it) },
+                    hazeState = hazeState
+                )
+
+                OpenSettingsToggleRow(
+                    title = "Custom lists & playlists",
+                    subtitle = "Sync personal Trakt lists as in-app playlists",
+                    checked = traktSyncLists,
+                    onCheckedChange = { viewModel.setTraktSyncLists(it) },
                     hazeState = hazeState
                 )
             }
-        )
+        }
 
-        // Trakt.tv Under Maintenance Glass Dialog
-        if (showTraktMaintenanceDialog) {
-            NetvioGlassDialog(
-                title = "Currently Under Maintenance",
-                message = "Trakt.tv sign-in and synchronization are temporarily offline while production API credentials are being finalized. Use Simkl above to sync your watchlist and playback history in the meantime.",
-                confirmText = "Got it",
-                dismissText = null,
-                icon = Icons.Outlined.Build,
+        // Trakt Connect Glass Dialog
+        if (showTraktConnectDialog) {
+            TraktConnectDialog(
                 hazeState = hazeState,
-                onConfirm = { showTraktMaintenanceDialog = false },
-                onDismiss = { showTraktMaintenanceDialog = false }
+                isTraktValidating = isTraktValidating,
+                traktAuthError = traktAuthError,
+                onDismiss = { showTraktConnectDialog = false },
+                onClearError = { traktAuthError = null },
+                onConnect = { codeOrUrl ->
+                    if (!isTraktValidating) {
+                        isTraktValidating = true
+                        traktAuthError = null
+                        coroutineScope.launch {
+                            try {
+                                val traktClient = com.netvio.core.sync.trakt.TraktClient.getInstance()
+                                val prefs = com.netvio.data.preferences.PreferencesRepository.getInstance(context)
+                                val syncVerifier = context.getSharedPreferences("trakt_auth_prefs", android.content.Context.MODE_PRIVATE)
+                                    .getString("pending_code_verifier", null)
+                                val storedVerifier = prefs.traktCodeVerifier.firstOrNull()?.ifBlank { null }
+                                val verifier = syncVerifier ?: storedVerifier ?: traktClient.pendingCodeVerifier
+
+                                val extractedCode = Regex("""code=([^&#]+)""").find(codeOrUrl)?.groupValues?.get(1) ?: codeOrUrl.trim()
+                                val exchangeRes = traktClient.exchangeCodeForToken(extractedCode, codeVerifier = verifier)
+                                if (exchangeRes.isSuccess) {
+                                    val tokenResp = exchangeRes.getOrThrow()
+                                    val profile = traktClient.getUserProfile(tokenResp.accessToken).getOrNull()
+                                    val username = profile?.username?.ifBlank { "Trakt User" } ?: "Trakt User"
+                                    viewModel.setTraktAuth(tokenResp.accessToken, tokenResp.refreshToken, username)
+                                    prefs.clearTraktCodeVerifier()
+                                    context.getSharedPreferences("trakt_auth_prefs", android.content.Context.MODE_PRIVATE)
+                                        .edit().clear().commit()
+                                    try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
+                                    showTraktConnectDialog = false
+                                } else {
+                                    traktAuthError = exchangeRes.exceptionOrNull()?.message
+                                        ?: "Unable to verify Trakt authorization code."
+                                }
+                            } catch (e: Exception) {
+                                traktAuthError = e.message ?: "Unable to verify Trakt authorization code."
+                            } finally {
+                                isTraktValidating = false
+                            }
+                        }
+                    }
+                }
             )
         }
 
@@ -553,7 +683,7 @@ fun IntegrationsSettingsPage(
                             val storedVerifier = prefs.simklCodeVerifier.firstOrNull()?.ifBlank { null }
                             val verifier = syncVerifier ?: storedVerifier ?: simklClient.pendingCodeVerifier
 
-                            val extractedCode = Regex("""code=([^&]+)""").find(codeOrToken)?.groupValues?.get(1) ?: codeOrToken
+                            val extractedCode = Regex("""code=([^&#]+)""").find(codeOrToken)?.groupValues?.get(1) ?: codeOrToken.trim()
                             val exchangeRes = simklClient.exchangeCodeForToken(extractedCode, codeVerifier = verifier)
                             val resolvedToken = if (exchangeRes.isSuccess && exchangeRes.getOrThrow().accessToken.isNotBlank()) {
                                 exchangeRes.getOrThrow().accessToken
@@ -584,7 +714,7 @@ fun IntegrationsSettingsPage(
         if (showDisconnectTraktDialog) {
             NetvioGlassDialog(
                 title = "Disconnect Trakt.tv?",
-                message = "Your scrobbling and playback history syncing with @$traktUsername will be paused until you sign in again.",
+                message = "Your scrobbling and playback history syncing with @$displayTraktUsername will be paused until you sign in again.",
                 confirmText = "Disconnect",
                 dismissText = "Cancel",
                 icon = Icons.Outlined.LinkOff,
@@ -620,21 +750,154 @@ fun IntegrationsSettingsPage(
     }
 }
 
+private fun formatRelativeSyncTime(timestamp: Long): String {
+    val diff = (System.currentTimeMillis() - timestamp).coerceAtLeast(0L)
+    val mins = diff / 60_000L
+    return when {
+        mins < 1L -> "just now"
+        mins < 60L -> "$mins min${if (mins == 1L) "" else "s"} ago"
+        else -> {
+            val hours = mins / 60L
+            "$hours hr${if (hours == 1L) "" else "s"} ago"
+        }
+    }
+}
+
+private data class TrackerCardPalette(
+    val amoledFill: Color,
+    val lcdFill: Color,
+    val borderHighlight: Color,
+    val borderAccent: Color,
+    val glowPrimary: Color,
+    val statusActiveColor: Color,
+    val statusSyncingColor: Color,
+    val statusBgTint: Color,
+    val statusBorderTint: Color,
+    val statusLabelConnected: Color,
+    val telemetryColor: Color,
+    val dividerColor: Color,
+    val connectLabel: String
+)
+
+private val SimklCardPalette = TrackerCardPalette(
+    amoledFill = Color(0xFF05080D).copy(alpha = 0.94f),
+    lcdFill = Color(0xFF0C121C).copy(alpha = 0.80f),
+    borderHighlight = Color(0xFF7DD3FC),
+    borderAccent = Color(0xFF38BDF8),
+    glowPrimary = Color(0xFF38BDF8),
+    statusActiveColor = Color(0xFF38BDF8),
+    statusSyncingColor = Color(0xFF7DD3FC),
+    statusBgTint = Color(0xFF38BDF8).copy(alpha = 0.13f),
+    statusBorderTint = Color(0xFF7DD3FC).copy(alpha = 0.30f),
+    statusLabelConnected = Color(0xFFE0F2FE),
+    telemetryColor = Color(0xFFE2F1FA).copy(alpha = 0.78f),
+    dividerColor = Color(0xFFBAE6FD).copy(alpha = 0.11f),
+    connectLabel = "Connect Simkl"
+)
+
+private val TraktCardPalette = TrackerCardPalette(
+    amoledFill = Color(0xFF0B0507).copy(alpha = 0.94f),
+    lcdFill = Color(0xFF170B0E).copy(alpha = 0.80f),
+    borderHighlight = Color(0xFFFF8A8E),
+    borderAccent = Color(0xFFED1C24),
+    glowPrimary = Color(0xFFED1C24),
+    statusActiveColor = Color(0xFFFF5C62),
+    statusSyncingColor = Color(0xFFFF9498),
+    statusBgTint = Color(0xFFED1C24).copy(alpha = 0.14f),
+    statusBorderTint = Color(0xFFFF8A8E).copy(alpha = 0.30f),
+    statusLabelConnected = Color(0xFFFFECEE),
+    telemetryColor = Color(0xFFFCE7E9).copy(alpha = 0.78f),
+    dividerColor = Color(0xFFFECDD3).copy(alpha = 0.11f),
+    connectLabel = "Connect Trakt"
+)
+
 /**
  * Architectural Frosted-Glass Surface for the Simkl Integration Section.
- *
- * Crafted following Apple Design, Impeccable, Emil Kowalski, Taste-Skill, and Unslop principles:
- * - Single non-nested glass surface (20dp radius) with directional ice-blue/white 0.5dp specular border.
- * - Features the Simkl wordmark (`SIMKL™`) in a crisp white-to-electric-blue gradient.
- * - Secondary copy is tinted from the surface's sky-blue hue (#D8F3FF @ 72%) for >5:1 contrast without dead gray.
- * - Tabular numerals (`tnum`) on sync timestamps and physics-based press feedback (0.97f scale).
  */
 @Composable
 private fun SimklSyncSectionCard(
     isConnected: Boolean,
     isValidating: Boolean,
     isSyncing: Boolean,
+    capabilitySummary: String,
+    statusConnectedLabel: String,
     telemetryText: String,
+    syncError: String? = null,
+    hazeState: dev.chrisbanes.haze.HazeState?,
+    onConnectClick: () -> Unit,
+    onSyncNowClick: () -> Unit,
+    onDisconnectClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    TrackerSyncSectionCard(
+        palette = SimklCardPalette,
+        wordmark = { SimklGradientWordmark(height = 19.dp) },
+        isConnected = isConnected,
+        isValidating = isValidating,
+        isSyncing = isSyncing,
+        capabilitySummary = capabilitySummary,
+        statusConnectedLabel = statusConnectedLabel,
+        telemetryText = telemetryText,
+        syncError = syncError,
+        hazeState = hazeState,
+        onConnectClick = onConnectClick,
+        onSyncNowClick = onSyncNowClick,
+        onDisconnectClick = onDisconnectClick,
+        modifier = modifier
+    )
+}
+
+/**
+ * Architectural Frosted-Glass Surface for the Trakt.tv Integration Section.
+ */
+@Composable
+private fun TraktSyncSectionCard(
+    isConnected: Boolean,
+    isValidating: Boolean,
+    isSyncing: Boolean,
+    capabilitySummary: String,
+    statusConnectedLabel: String,
+    telemetryText: String,
+    syncError: String? = null,
+    hazeState: dev.chrisbanes.haze.HazeState?,
+    onConnectClick: () -> Unit,
+    onSyncNowClick: () -> Unit,
+    onDisconnectClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    TrackerSyncSectionCard(
+        palette = TraktCardPalette,
+        wordmark = { TraktBrandWordmark(emblemSize = 21.dp) },
+        isConnected = isConnected,
+        isValidating = isValidating,
+        isSyncing = isSyncing,
+        capabilitySummary = capabilitySummary,
+        statusConnectedLabel = statusConnectedLabel,
+        telemetryText = telemetryText,
+        syncError = syncError,
+        hazeState = hazeState,
+        onConnectClick = onConnectClick,
+        onSyncNowClick = onSyncNowClick,
+        onDisconnectClick = onDisconnectClick,
+        modifier = modifier
+    )
+}
+
+/**
+ * Shared frosted-glass tracker card for Simkl and Trakt.tv.
+ * Keeps unlinked surfaces neutral and reserves brand color for active/syncing status.
+ */
+@Composable
+private fun TrackerSyncSectionCard(
+    palette: TrackerCardPalette,
+    wordmark: @Composable () -> Unit,
+    isConnected: Boolean,
+    isValidating: Boolean,
+    isSyncing: Boolean,
+    capabilitySummary: String,
+    statusConnectedLabel: String,
+    telemetryText: String,
+    syncError: String? = null,
     hazeState: dev.chrisbanes.haze.HazeState?,
     onConnectClick: () -> Unit,
     onSyncNowClick: () -> Unit,
@@ -643,20 +906,28 @@ private fun SimklSyncSectionCard(
 ) {
     val isAmoled = LocalAmoledMode.current
     val haptic = LocalHapticFeedback.current
-    val cardShape = RoundedCornerShape(SettingsTokens.RadiusPreviewCard)
+    val cardShape = RoundedCornerShape(SettingsTokens.RadiusPopover)
+    val isActiveSurface = isConnected || isSyncing
 
-    val baseFill = if (isAmoled) {
-        Color(0xFF03070D).copy(alpha = 0.94f)
+    val baseFill = if (isActiveSurface) {
+        if (isAmoled) palette.amoledFill else palette.lcdFill
     } else {
-        Color(0xFF0A121E).copy(alpha = 0.78f)
+        if (isAmoled) Color(0xFF07080B).copy(alpha = 0.94f) else Color(0xFF10131A).copy(alpha = 0.78f)
     }
 
-    val specularBorderBrush = remember(isConnected) {
-        Brush.linearGradient(
-            0.00f to Color(0xFF7DD3FC).copy(alpha = if (isConnected) 0.44f else 0.32f),
-            0.48f to Color.White.copy(alpha = 0.15f),
-            1.00f to Color(0xFF38BDF8).copy(alpha = if (isConnected) 0.24f else 0.12f)
-        )
+    val specularBorderBrush = remember(isActiveSurface, palette) {
+        if (isActiveSurface) {
+            Brush.linearGradient(
+                0.00f to palette.borderHighlight.copy(alpha = 0.34f),
+                0.50f to Color.White.copy(alpha = 0.14f),
+                1.00f to palette.borderAccent.copy(alpha = 0.20f)
+            )
+        } else {
+            Brush.linearGradient(
+                0.00f to Color.White.copy(alpha = 0.18f),
+                1.00f to Color.White.copy(alpha = 0.08f)
+            )
+        }
     }
 
     Box(
@@ -669,121 +940,186 @@ private fun SimklSyncSectionCard(
                 borderWidth = 0.dp,
                 customFill = baseFill
             )
-            .drawBehind {
-                // Subtle top-left atmospheric sky-blue refraction behind the SIMKL™ wordmark
-                val glowRadius = size.width * 0.72f
-                drawRect(
-                    brush = Brush.radialGradient(
-                        0.00f to Color(0xFF38BDF8).copy(alpha = if (isConnected) 0.16f else 0.11f),
-                        0.55f to Color(0xFF0284C7).copy(alpha = 0.04f),
-                        1.00f to Color.Transparent,
-                        center = Offset(size.width * 0.18f, size.height * 0.15f),
-                        radius = glowRadius.coerceAtLeast(1f)
-                    )
-                )
-            }
+            .then(
+                if (isActiveSurface) {
+                    Modifier.drawBehind {
+                        val glowRadius = size.width * 0.65f
+                        drawRect(
+                            brush = Brush.radialGradient(
+                                0.00f to palette.glowPrimary.copy(alpha = 0.11f),
+                                0.65f to palette.glowPrimary.copy(alpha = 0.02f),
+                                1.00f to Color.Transparent,
+                                center = Offset(size.width * 0.16f, size.height * 0.14f),
+                                radius = glowRadius.coerceAtLeast(1f)
+                            )
+                        )
+                    }
+                } else {
+                    Modifier
+                }
+            )
             .border(
                 width = SettingsTokens.HairlineWidth,
                 brush = specularBorderBrush,
                 shape = cardShape
             )
-            .padding(20.dp)
+            .padding(horizontal = 18.dp, vertical = 18.dp)
     ) {
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Top Row: Simkl Blue-White Gradient Wordmark + Live Status Pill
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                SimklGradientWordmark(height = 21.dp)
-
-                // Status Pill
-                val statusDotColor = when {
-                    isSyncing -> Color(0xFF7DD3FC)
-                    isConnected -> Color(0xFF38BDF8)
-                    else -> Color.White.copy(alpha = 0.34f)
+                Box(modifier = Modifier.padding(end = 12.dp)) {
+                    wordmark()
                 }
+
                 val statusLabel = when {
                     isSyncing -> "Syncing"
-                    isConnected -> "Linked"
+                    isConnected -> statusConnectedLabel
                     else -> "Not linked"
                 }
 
-                Box(
+                Row(
                     modifier = Modifier
+                        .widthIn(max = 172.dp)
                         .clip(CircleShape)
                         .background(
-                            if (isConnected) Color(0xFF38BDF8).copy(alpha = 0.12f)
-                            else Color.White.copy(alpha = 0.06f)
+                            if (isActiveSurface) palette.statusBgTint else Color.White.copy(alpha = 0.05f)
                         )
                         .border(
-                            SettingsTokens.HairlineWidth,
-                            if (isConnected) Color(0xFF7DD3FC).copy(alpha = 0.32f)
-                            else SettingsTokens.HairlineBorder,
-                            CircleShape
+                            width = SettingsTokens.HairlineWidth,
+                            color = if (isActiveSurface) palette.statusBorderTint else SettingsTokens.HairlineBorder,
+                            shape = CircleShape
                         )
                         .padding(horizontal = 10.dp, vertical = 5.dp),
-                    contentAlignment = Alignment.Center
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .clip(CircleShape)
-                                .background(statusDotColor)
-                        )
-                        Text(
-                            text = statusLabel,
-                            style = TextStyle(
-                                fontFamily = AppFontFamily,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 11.5.sp,
-                                lineHeight = 14.sp,
-                                color = if (isConnected) Color(0xFFE0F2FE) else Color(0xFFD8F3FF).copy(alpha = 0.68f)
+                    when {
+                        isSyncing -> {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(11.dp),
+                                color = palette.statusSyncingColor,
+                                strokeWidth = 1.6.dp
                             )
-                        )
+                        }
+                        isConnected -> {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(palette.statusActiveColor)
+                            )
+                        }
+                        else -> {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.5.dp)
+                                    .border(
+                                        width = 1.2.dp,
+                                        color = Color.White.copy(alpha = 0.42f),
+                                        shape = CircleShape
+                                    )
+                            )
+                        }
                     }
+
+                    Text(
+                        text = statusLabel,
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 11.5.sp,
+                            lineHeight = 14.sp,
+                            color = if (isActiveSurface) {
+                                palette.statusLabelConnected
+                            } else {
+                                Color.White.copy(alpha = 0.62f)
+                            }
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
 
-            // Telemetry / Description Copy (Hue-tinted secondary text + tabular numerals)
-            Text(
-                text = telemetryText,
-                style = TextStyle(
-                    fontFamily = AppFontFamily,
-                    fontWeight = FontWeight.Normal,
-                    fontSize = 13.sp,
-                    lineHeight = 18.5.sp,
-                    fontFeatureSettings = "tnum",
-                    color = Color(0xFFD8F3FF).copy(alpha = 0.74f)
-                )
-            )
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                if (!isConnected) {
+                    Text(
+                        text = capabilitySummary,
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            color = Color.White.copy(alpha = 0.84f)
+                        )
+                    )
+                    Text(
+                        text = telemetryText,
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Normal,
+                            fontSize = 12.5.sp,
+                            lineHeight = 17.5.sp,
+                            color = Color.White.copy(alpha = 0.54f)
+                        )
+                    )
+                } else {
+                    Text(
+                        text = telemetryText,
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Normal,
+                            fontSize = 13.sp,
+                            lineHeight = 18.5.sp,
+                            fontFeatureSettings = "tnum",
+                            color = palette.telemetryColor
+                        )
+                    )
+                    if (!syncError.isNullOrBlank()) {
+                        Text(
+                            text = syncError,
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontWeight = FontWeight.Normal,
+                                fontSize = 12.sp,
+                                lineHeight = 16.5.sp,
+                                color = Color(0xFFFCA5A5)
+                            ),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        text = capabilitySummary,
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 11.5.sp,
+                            lineHeight = 15.5.sp,
+                            color = Color.White.copy(alpha = 0.46f)
+                        )
+                    )
+                }
+            }
 
-            // Hairline Divider inside surface before action bar
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(SettingsTokens.HairlineWidth)
-                    .background(Color(0xFFBAE6FD).copy(alpha = 0.12f))
-            )
-
-            // Action Bar: Connect CTA when unlinked, or Sync Now + Disconnect when linked
-            val ctaGradientBrush = remember {
-                Brush.horizontalGradient(
-                    colors = listOf(
-                        Color.White,
-                        Color(0xFFDDF4FF),
-                        Color(0xFF7DD3FC)
+                    .background(
+                        if (isActiveSurface) palette.dividerColor else SettingsTokens.HairlineDivider
                     )
-                )
-            }
+            )
 
             if (!isConnected) {
                 Box(
@@ -803,27 +1139,27 @@ private fun SimklSyncSectionCard(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(42.dp)
+                            .height(44.dp)
                             .clip(CircleShape)
-                            .background(ctaGradientBrush, CircleShape)
+                            .background(Color.White, CircleShape)
                             .padding(horizontal = 18.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         if (isValidating) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(17.dp),
-                                color = Color(0xFF060E17),
+                                modifier = Modifier.size(16.dp),
+                                color = SettingsTokens.TextDark,
                                 strokeWidth = 2.dp
                             )
                         } else {
                             Text(
-                                text = "Connect Simkl",
+                                text = palette.connectLabel,
                                 style = TextStyle(
                                     fontFamily = AppFontFamily,
                                     fontWeight = FontWeight.SemiBold,
-                                    fontSize = 13.5.sp,
-                                    lineHeight = 17.sp,
-                                    color = Color(0xFF060E17)
+                                    fontSize = 14.sp,
+                                    lineHeight = 18.sp,
+                                    color = SettingsTokens.TextDark
                                 )
                             )
                         }
@@ -835,7 +1171,6 @@ private fun SimklSyncSectionCard(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Primary: Sync Now Pill (Blue-White Gradient)
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -850,9 +1185,9 @@ private fun SimklSyncSectionCard(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(40.dp)
+                                .height(44.dp)
                                 .clip(CircleShape)
-                                .background(ctaGradientBrush, CircleShape)
+                                .background(Color.White, CircleShape)
                                 .padding(horizontal = 16.dp),
                             contentAlignment = Alignment.Center
                         ) {
@@ -863,17 +1198,18 @@ private fun SimklSyncSectionCard(
                                 ) {
                                     CircularProgressIndicator(
                                         modifier = Modifier.size(15.dp),
-                                        color = Color(0xFF060E17),
+                                        color = SettingsTokens.TextDark,
                                         strokeWidth = 1.8.dp
                                     )
                                     Text(
-                                        text = "Syncing...",
+                                        text = "Syncing…",
                                         style = TextStyle(
                                             fontFamily = AppFontFamily,
                                             fontWeight = FontWeight.SemiBold,
-                                            fontSize = 13.sp,
-                                            color = Color(0xFF060E17)
-                                        )
+                                            fontSize = 13.5.sp,
+                                            color = SettingsTokens.TextDark
+                                        ),
+                                        maxLines = 1
                                     )
                                 }
                             } else {
@@ -884,7 +1220,7 @@ private fun SimklSyncSectionCard(
                                     Icon(
                                         imageVector = Icons.Outlined.Refresh,
                                         contentDescription = null,
-                                        tint = Color(0xFF060E17),
+                                        tint = SettingsTokens.TextDark,
                                         modifier = Modifier.size(16.dp)
                                     )
                                     Text(
@@ -892,16 +1228,16 @@ private fun SimklSyncSectionCard(
                                         style = TextStyle(
                                             fontFamily = AppFontFamily,
                                             fontWeight = FontWeight.SemiBold,
-                                            fontSize = 13.sp,
-                                            color = Color(0xFF060E17)
-                                        )
+                                            fontSize = 13.5.sp,
+                                            color = SettingsTokens.TextDark
+                                        ),
+                                        maxLines = 1
                                     )
                                 }
                             }
                         }
                     }
 
-                    // Secondary: Disconnect Frosted Glass Pill
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -918,7 +1254,7 @@ private fun SimklSyncSectionCard(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(40.dp)
+                                .height(44.dp)
                                 .clip(CircleShape)
                                 .background(Color.White.copy(alpha = 0.06f), CircleShape)
                                 .border(
@@ -934,9 +1270,10 @@ private fun SimklSyncSectionCard(
                                 style = TextStyle(
                                     fontFamily = AppFontFamily,
                                     fontWeight = FontWeight.Medium,
-                                    fontSize = 13.sp,
+                                    fontSize = 13.5.sp,
                                     color = SettingsTokens.TextWhite88
-                                )
+                                ),
+                                maxLines = 1
                             )
                         }
                     }

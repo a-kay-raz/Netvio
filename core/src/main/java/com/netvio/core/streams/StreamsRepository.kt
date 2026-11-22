@@ -37,7 +37,11 @@ object StreamsRepository {
         title: String? = null,
         year: Int? = null,
         imdbId: String? = null
-    ): String = "$type::$videoId::$season::$episode::$title::$year::$imdbId"
+    ): String {
+        val p2pEnabled = com.netvio.core.p2p.P2pSettingsRepository.isP2pEnabled()
+        val hasActiveDebrid = com.netvio.core.debrid.DebridManager.hasActiveDebrid()
+        return "$type::$videoId::$season::$episode::$title::$year::$imdbId::p2p=$p2pEnabled::debrid=$hasActiveDebrid"
+    }
 
     fun load(
         type: String,
@@ -273,6 +277,8 @@ object StreamsRepository {
 
             val baseId = if (isLiveTv || isCustomId) cleanTmdbId else cleanTmdbId.substringBefore(':')
             val isTv = !isLiveTv && (normType == "series" || normType == "tv")
+            val p2pEnabled = com.netvio.core.p2p.P2pSettingsRepository.isP2pEnabled()
+            val hasActiveDebrid = com.netvio.core.debrid.DebridManager.hasActiveDebrid()
 
             val canonicalTmdbId: String
             val effectiveImdbId: String?
@@ -426,6 +432,13 @@ object StreamsRepository {
                             )
                         }
                         val verifiedStreams = com.netvio.core.matcher.MatchScorer.filterAndRankStreams(streamHints, streamItems)
+                            .filter { item ->
+                                com.netvio.core.p2p.P2pStreamPolicy.shouldIncludeStream(
+                                    isTorrentStream = item.isTorrentStream,
+                                    p2pEnabled = p2pEnabled,
+                                    hasActiveDebrid = hasActiveDebrid
+                                )
+                            }
 
                         completions.trySend(
                             StreamLoadCompletion.PluginScraper(
@@ -560,6 +573,12 @@ object StreamsRepository {
                             }
                         } else {
                             com.netvio.core.matcher.MatchScorer.filterAndRankStreams(streamHints, streamItems)
+                        }.filter { item ->
+                            com.netvio.core.p2p.P2pStreamPolicy.shouldIncludeStream(
+                                isTorrentStream = item.isTorrentStream,
+                                p2pEnabled = p2pEnabled,
+                                hasActiveDebrid = hasActiveDebrid
+                            )
                         }
 
                         completions.trySend(

@@ -12,13 +12,22 @@ import java.io.File
 
 @OptIn(UnstableApi::class)
 object StreamingPlaybackCacheManager {
-    private const val MAX_CACHE_SIZE_BYTES = 350L * 1024L * 1024L // 350 MB LRU Cache
+    private const val MIN_CACHE_SIZE_BYTES = 64L * 1024L * 1024L
+    private const val MAX_CACHE_SIZE_BYTES = 350L * 1024L * 1024L
+    private const val DEFAULT_CACHE_SIZE_BYTES = 150L * 1024L * 1024L
+
+    @Volatile
+    private var configuredMaxCacheSizeBytes: Long = DEFAULT_CACHE_SIZE_BYTES
 
     @Volatile
     private var simpleCache: SimpleCache? = null
 
     @Volatile
     private var databaseProvider: StandaloneDatabaseProvider? = null
+
+    fun configureMaxSizeBytes(bytes: Long) {
+        configuredMaxCacheSizeBytes = bytes.coerceIn(MIN_CACHE_SIZE_BYTES, MAX_CACHE_SIZE_BYTES)
+    }
 
     @Synchronized
     fun getCache(context: Context): SimpleCache {
@@ -31,7 +40,7 @@ object StreamingPlaybackCacheManager {
                 val dbProvider = databaseProvider ?: StandaloneDatabaseProvider(context.applicationContext).also {
                     databaseProvider = it
                 }
-                val evictor = LeastRecentlyUsedCacheEvictor(MAX_CACHE_SIZE_BYTES)
+                val evictor = LeastRecentlyUsedCacheEvictor(configuredMaxCacheSizeBytes)
                 SimpleCache(cacheDir, evictor, dbProvider).also {
                     simpleCache = it
                 }

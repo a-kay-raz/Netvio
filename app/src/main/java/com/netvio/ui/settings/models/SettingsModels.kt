@@ -75,6 +75,13 @@ enum class SettingsPage(
         category = SettingsCategory.Ecosystem,
         icon = androidx.compose.material.icons.Icons.Outlined.Extension
     ),
+    TvCompanion(
+        route = "settings/tv_companion",
+        title = "TV Companion",
+        subtitle = "Pair TV, playback remote & setup push",
+        category = SettingsCategory.Ecosystem,
+        icon = androidx.compose.material.icons.Icons.Outlined.Tv
+    ),
     Storage(
         route = "settings/storage",
         title = "Storage & cache",
@@ -91,7 +98,8 @@ enum class SettingsPage(
 fun SettingsPage.isVisibleFor(profile: UserProfile): Boolean {
     if (profile.isKids) {
         return this != SettingsPage.Integrations &&
-               this != SettingsPage.Plugins
+               this != SettingsPage.Plugins &&
+               this != SettingsPage.TvCompanion
     }
     return true
 }

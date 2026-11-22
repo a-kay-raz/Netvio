@@ -127,7 +127,7 @@ class SupabaseRestClient(
             val encodedUserId = URLEncoder.encode(userId, Charsets.UTF_8.name())
             val request = buildAuthorizedRequest(
                 Request.Builder()
-                    .url("$supabaseUrl/rest/v1/profiles?user_id=eq.$encodedUserId&is_deleted=eq.false&order=client_updated_at_ms.asc")
+                    .url("$supabaseUrl/rest/v1/profiles?user_id=eq.$encodedUserId&order=client_updated_at_ms.asc")
                     .get()
             ).build()
 

@@ -102,6 +102,8 @@ fun PluginsSettingsPage(
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val testingIds by viewModel.testingPluginIds.collectAsState()
     val healthMap by viewModel.pluginHealthMap.collectAsState()
+    val p2pStreamsEnabled by viewModel.p2pStreamsEnabled.collectAsState()
+    val hasActiveDebrid by viewModel.hasActiveDebrid.collectAsState()
 
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { PluginsTab.entries.size })
 
@@ -583,6 +585,18 @@ fun PluginsSettingsPage(
                                 }
                             }
 
+                            // Stream Source Policy: Allow / Disable P2P Torrent Streams
+                            item {
+                                P2pStreamPreferenceCard(
+                                    p2pEnabled = p2pStreamsEnabled,
+                                    hasActiveDebrid = hasActiveDebrid,
+                                    onToggle = { enabled ->
+                                        try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
+                                        viewModel.setP2pStreamsEnabled(enabled)
+                                    }
+                                )
+                            }
+
                             // Section: INSTALLED · X with Update all action
                             item {
                                 Spacer(modifier = Modifier.height(4.dp))
@@ -890,6 +904,18 @@ fun PluginsSettingsPage(
                                         }
                                     )
                                 }
+                            }
+
+                            // Stream Source Policy: Allow / Disable P2P Torrent Streams
+                            item {
+                                P2pStreamPreferenceCard(
+                                    p2pEnabled = p2pStreamsEnabled,
+                                    hasActiveDebrid = hasActiveDebrid,
+                                    onToggle = { enabled ->
+                                        try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
+                                        viewModel.setP2pStreamsEnabled(enabled)
+                                    }
+                                )
                             }
 
                             // Section: INSTALLED · X with Update all action
@@ -1834,5 +1860,59 @@ private fun HubTabRow(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun P2pStreamPreferenceCard(
+    p2pEnabled: Boolean,
+    hasActiveDebrid: Boolean,
+    onToggle: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val subtitle = when {
+        p2pEnabled -> "BitTorrent & magnet swarm sources active alongside direct URLs"
+        hasActiveDebrid -> "Swarm disabled · Direct HTTPS & Debrid-cached torrents only"
+        else -> "P2P disabled · Only direct HTTPS / HLS / DASH streams shown"
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color.White.copy(alpha = 0.04f))
+            .border(0.5.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(18.dp))
+            .clickable { onToggle(!p2pEnabled) }
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Text(
+                text = "Allow P2P torrent streams",
+                style = TextStyle(
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            )
+            Text(
+                text = subtitle,
+                style = TextStyle(
+                    color = PluginsGlassTokens.TextSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    fontWeight = FontWeight.Normal
+                )
+            )
+        }
+
+        PluginsGlassToggle(
+            checked = p2pEnabled,
+            onCheckedChange = onToggle
+        )
     }
 }

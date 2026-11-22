@@ -75,8 +75,19 @@ class PlaylistRepository private constructor(private val context: Context) {
     private val libraryRepository = LibraryRepository.getInstance(context)
     private val preferencesRepository = PreferencesRepository.getInstance(context)
 
+    private val stateLock = Any()
+    private val _rawPlaylists = MutableStateFlow<List<Playlist>>(emptyList())
     private val _userPlaylists = MutableStateFlow<List<Playlist>>(emptyList())
     val userPlaylists: StateFlow<List<Playlist>> = _userPlaylists.asStateFlow()
+
+    private inline fun updatePlaylistsState(transform: (List<Playlist>) -> List<Playlist>): List<Playlist> {
+        return synchronized(stateLock) {
+            val nextRaw = transform(_rawPlaylists.value)
+            _rawPlaylists.value = nextRaw
+            _userPlaylists.value = nextRaw.filterNot { it.isDeleted }
+            nextRaw
+        }
+    }
 
     @Volatile
     private var isDiskLoaded = false
@@ -92,10 +103,10 @@ class PlaylistRepository private constructor(private val context: Context) {
     }
 
     suspend fun awaitLoaded(): List<Playlist> {
-        if (isDiskLoaded && _userPlaylists.value.isNotEmpty()) return _userPlaylists.value
+        if (isDiskLoaded && _rawPlaylists.value.isNotEmpty()) return _userPlaylists.value
         try {
             val parsed = jsonStore.read()
-            _userPlaylists.update { current ->
+            updatePlaylistsState { current ->
                 if (current.isEmpty()) {
                     parsed
                 } else {
@@ -224,7 +235,7 @@ class PlaylistRepository private constructor(private val context: Context) {
             createdAt = now,
             clientUpdatedAtMs = now
         )
-        _userPlaylists.update { current ->
+        updatePlaylistsState { current ->
             if (current.any { it.id == newPlaylist.id }) current else listOf(newPlaylist) + current
         }
         scope.launch {
@@ -243,13 +254,21 @@ class PlaylistRepository private constructor(private val context: Context) {
 
     fun deletePlaylist(playlistId: String) {
         val now = System.currentTimeMillis()
-        _userPlaylists.update { current ->
-            current.map { if (it.id == playlistId) it.copy(isDeleted = true, clientUpdatedAtMs = now) else it }
+        updatePlaylistsState { current ->
+            current.map {
+                if (it.id == playlistId) {
+                    it.copy(isDeleted = true, clientUpdatedAtMs = maxOf(now, it.clientUpdatedAtMs + 1L))
+                } else it
+            }
         }
         scope.launch {
             try {
                 jsonStore.update { diskList ->
-                    diskList.map { if (it.id == playlistId) it.copy(isDeleted = true, clientUpdatedAtMs = now) else it }
+                    diskList.map {
+                        if (it.id == playlistId) {
+                            it.copy(isDeleted = true, clientUpdatedAtMs = maxOf(now, it.clientUpdatedAtMs + 1L))
+                        } else it
+                    }
                 }
                 com.netvio.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
             } catch (_: Exception) {}
@@ -262,7 +281,7 @@ class PlaylistRepository private constructor(private val context: Context) {
             title = item.title.replace('+', ' ').trim(),
             episodeTitle = item.episodeTitle?.replace('+', ' ')?.trim()
         )
-        _userPlaylists.update { list ->
+        updatePlaylistsState { list ->
             list.map { pl ->
                 if (pl.id == playlistId) {
                     val existing = pl.items.find { it.uniqueKey == cleanItem.uniqueKey }
@@ -273,7 +292,11 @@ class PlaylistRepository private constructor(private val context: Context) {
                         )
                     } else cleanItem
                     val filtered = pl.items.filterNot { it.uniqueKey == cleanItem.uniqueKey }
-                    pl.copy(items = listOf(mergedItem) + filtered, isDeleted = false, clientUpdatedAtMs = now)
+                    pl.copy(
+                        items = listOf(mergedItem) + filtered,
+                        isDeleted = false,
+                        clientUpdatedAtMs = maxOf(now, pl.clientUpdatedAtMs + 1L)
+                    )
                 } else pl
             }
         }
@@ -290,7 +313,11 @@ class PlaylistRepository private constructor(private val context: Context) {
                                 )
                             } else cleanItem
                             val filtered = pl.items.filterNot { it.uniqueKey == cleanItem.uniqueKey }
-                            pl.copy(items = listOf(mergedItem) + filtered, isDeleted = false, clientUpdatedAtMs = now)
+                            pl.copy(
+                                items = listOf(mergedItem) + filtered,
+                                isDeleted = false,
+                                clientUpdatedAtMs = maxOf(now, pl.clientUpdatedAtMs + 1L)
+                            )
                         } else pl
                     }
                 }
@@ -305,12 +332,12 @@ class PlaylistRepository private constructor(private val context: Context) {
     fun removeItemFromPlaylist(playlistId: String, itemKey: String) {
         val now = System.currentTimeMillis()
         val cleanKey = itemKey.trim()
-        _userPlaylists.update { list ->
+        updatePlaylistsState { list ->
             list.map { pl ->
                 if (pl.id == playlistId) {
                     pl.copy(
                         items = pl.items.filterNot { it.uniqueKey == cleanKey || it.mediaId == cleanKey },
-                        clientUpdatedAtMs = now
+                        clientUpdatedAtMs = maxOf(now, pl.clientUpdatedAtMs + 1L)
                     )
                 } else pl
             }
@@ -322,7 +349,7 @@ class PlaylistRepository private constructor(private val context: Context) {
                         if (pl.id == playlistId) {
                             pl.copy(
                                 items = pl.items.filterNot { it.uniqueKey == cleanKey || it.mediaId == cleanKey },
-                                clientUpdatedAtMs = now
+                                clientUpdatedAtMs = maxOf(now, pl.clientUpdatedAtMs + 1L)
                             )
                         } else pl
                     }
@@ -335,13 +362,21 @@ class PlaylistRepository private constructor(private val context: Context) {
 
     fun updateLastPlayed(playlistId: String) {
         val now = System.currentTimeMillis()
-        _userPlaylists.update { list ->
-            list.map { if (it.id == playlistId) it.copy(lastPlayedAt = now, clientUpdatedAtMs = now) else it }
+        updatePlaylistsState { list ->
+            list.map {
+                if (it.id == playlistId) {
+                    it.copy(lastPlayedAt = now, clientUpdatedAtMs = maxOf(now, it.clientUpdatedAtMs + 1L))
+                } else it
+            }
         }
         scope.launch {
             try {
                 jsonStore.update { diskList ->
-                    diskList.map { if (it.id == playlistId) it.copy(lastPlayedAt = now, clientUpdatedAtMs = now) else it }
+                    diskList.map {
+                        if (it.id == playlistId) {
+                            it.copy(lastPlayedAt = now, clientUpdatedAtMs = maxOf(now, it.clientUpdatedAtMs + 1L))
+                        } else it
+                    }
                 }
                 com.netvio.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
             } catch (_: Exception) {}
@@ -351,22 +386,25 @@ class PlaylistRepository private constructor(private val context: Context) {
     /**
      * Returns all user-created custom playlists.
      */
-    fun getUserPlaylists(): List<Playlist> = _userPlaylists.value.filterNot { it.isDeleted }
+    fun getUserPlaylists(): List<Playlist> = _userPlaylists.value
 
     suspend fun getAllPlaylistsIncludingDeleted(): List<Playlist> {
         awaitLoaded()
-        return _userPlaylists.value
+        return _rawPlaylists.value
     }
 
     suspend fun mergeRemotePlaylists(remotePlaylists: List<com.netvio.core.sync.supabase.CloudPlaylist>) {
         if (remotePlaylists.isEmpty()) return
         awaitLoaded()
         val jsonParser = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-        _userPlaylists.update { localList ->
+        val updatedRaw = updatePlaylistsState { localList ->
             val localMap = localList.associateBy { it.id }.toMutableMap()
             for (remote in remotePlaylists) {
                 val existing = localMap[remote.playlistId]
-                if (existing == null || remote.clientUpdatedAtMs >= existing.clientUpdatedAtMs) {
+                val remoteWins = existing == null ||
+                    remote.clientUpdatedAtMs > existing.clientUpdatedAtMs ||
+                    (remote.clientUpdatedAtMs == existing.clientUpdatedAtMs && !existing.isDeleted && remote.isDeleted)
+                if (remoteWins) {
                     val parsedItems = try {
                         jsonParser.decodeFromString<List<PlaylistItem>>(remote.itemsJson)
                     } catch (_: Exception) {
@@ -387,7 +425,7 @@ class PlaylistRepository private constructor(private val context: Context) {
             localMap.values.toList()
         }
         try {
-            jsonStore.write(_userPlaylists.value)
+            jsonStore.write(updatedRaw)
         } catch (_: Exception) {}
     }
 
@@ -404,7 +442,7 @@ class PlaylistRepository private constructor(private val context: Context) {
         if (posterUrl.isBlank()) return
         val normTitle = title.replace('+', ' ').trim().lowercase()
         var changed = false
-        _userPlaylists.update { list ->
+        updatePlaylistsState { list ->
             list.map { pl ->
                 var plChanged = false
                 val updatedItems = pl.items.map { item ->
@@ -454,7 +492,7 @@ class PlaylistRepository private constructor(private val context: Context) {
         if (playlists.isEmpty()) return
         awaitLoaded()
         val now = System.currentTimeMillis()
-        _userPlaylists.update { current ->
+        val updatedRaw = updatePlaylistsState { current ->
             val localMap = current.associateBy { it.id }.toMutableMap()
             for (incoming in playlists) {
                 val existing = localMap[incoming.id]
@@ -469,7 +507,7 @@ class PlaylistRepository private constructor(private val context: Context) {
             localMap.values.toList()
         }
         try {
-            jsonStore.write(_userPlaylists.value)
+            jsonStore.write(updatedRaw)
             com.netvio.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
         } catch (_: Exception) {}
     }

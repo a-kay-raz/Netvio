@@ -27,7 +27,10 @@ class TraktClient(
     private val httpClient: OkHttpClient = DohDns.createOkHttpClient()
 ) {
 
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    private val omitDefaultsJson = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     /**
@@ -362,6 +365,37 @@ class TraktClient(
     }
 
     /**
+     * Adds movies and episode-granular shows to Trakt watched history.
+     * Endpoint: POST /sync/history
+     */
+    suspend fun addHistoryItems(accessToken: String, payload: TraktHistoryPayload): Result<TraktSyncResponse> = withContext(Dispatchers.IO) {
+        if (accessToken.isBlank()) return@withContext Result.failure(IllegalArgumentException("No access token"))
+        try {
+            val encoded = omitDefaultsJson.encodeToString(payload)
+            val request = Request.Builder()
+                .url("$BASE_URL/sync/history")
+                .header("Content-Type", "application/json")
+                .header("trakt-api-version", "2")
+                .header("trakt-api-key", clientId)
+                .header("Authorization", "Bearer $accessToken")
+                .post(encoded.toRequestBody(jsonMediaType))
+                .build()
+
+            httpClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful || response.code == 201) {
+                    val raw = response.body?.string() ?: ""
+                    val res = json.decodeFromString<TraktSyncResponse>(raw)
+                    Result.success(res)
+                } else {
+                    Result.failure(IOException("Failed to add to Trakt history: HTTP ${response.code}"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Removes items from watched history.
      * Endpoint: POST /sync/history/remove
      */
@@ -462,7 +496,7 @@ class TraktClient(
     /**
      * Constructs the Trakt OAuth 2.0 authorization URL with mandatory PKCE (S256).
      * Endpoint: https://trakt.tv/oauth/authorize
-     * Default redirect URI is "http://localhost".
+     * Default redirect URI is "https://thearcreactorguy.github.io/Euthopiar/auth/trakt/".
      */
     fun getAuthorizationUrl(
         redirectUri: String = REDIRECT_URI,
@@ -603,7 +637,7 @@ class TraktClient(
     companion object {
         const val BASE_URL = "https://api.trakt.tv"
         const val OAUTH_AUTHORIZE_URL = "https://trakt.tv/oauth/authorize"
-        const val REDIRECT_URI = "http://localhost"
+        const val REDIRECT_URI = "https://thearcreactorguy.github.io/Euthopiar/auth/trakt/"
         // Public open-source Trakt app client credentials
         val DEFAULT_CLIENT_ID: String = BuildConfig.TRAKT_CLIENT_ID
         val DEFAULT_CLIENT_SECRET: String = BuildConfig.TRAKT_CLIENT_SECRET

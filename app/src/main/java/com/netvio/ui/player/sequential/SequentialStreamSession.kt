@@ -66,6 +66,8 @@ class SequentialStreamSession(
 
     private val sessionDir = File(context.cacheDir, "seq_stream_$sessionId")
 
+    fun getSessionDirectoryName(): String = sessionDir.name
+
     val clusterIndex = MatroskaClusterIndex()
     private val scanner = EbmlClusterStreamScanner(clusterIndex)
 

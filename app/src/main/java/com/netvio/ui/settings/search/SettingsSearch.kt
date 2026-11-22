@@ -209,6 +209,15 @@ fun getAllSettingsSearchEntries(): List<SettingsSearchEntry> = listOf(
         keywords = listOf("debrid", "real-debrid", "alldebrid", "torbox", "premium", "api key"),
         icon = Icons.Outlined.Bolt
     ),
+    SettingsSearchEntry(
+        id = "tv_companion",
+        title = "TV Companion",
+        description = "Pair Android TV over Wi-Fi, control playback, type with phone keyboard and push addons",
+        category = SettingsCategory.Ecosystem,
+        page = SettingsPage.TvCompanion,
+        keywords = listOf("tv", "cast", "remote", "pair", "companion", "handoff", "keyboard", "pin"),
+        icon = Icons.Outlined.Tv
+    ),
 
     // Plugins & Scrapers
     SettingsSearchEntry(
@@ -229,6 +238,15 @@ fun getAllSettingsSearchEntries(): List<SettingsSearchEntry> = listOf(
         keywords = listOf("failover", "smart failover", "fallback", "stall", "auto switch", "stream fail"),
         icon = Icons.Outlined.Sync
     ),
+    SettingsSearchEntry(
+        id = "p2p_streams",
+        title = "Allow / Disable P2P Streams",
+        description = "Include or hide BitTorrent and magnet swarm sources across providers & addons",
+        category = SettingsCategory.Ecosystem,
+        page = SettingsPage.Plugins,
+        keywords = listOf("p2p", "torrent", "magnet", "disable p2p", "direct streams", "swarm"),
+        icon = Icons.Outlined.Hub
+    ),
 
     // Storage & Cache
     SettingsSearchEntry(
@@ -239,6 +257,15 @@ fun getAllSettingsSearchEntries(): List<SettingsSearchEntry> = listOf(
         page = SettingsPage.Storage,
         keywords = listOf("storage", "cache", "clear", "disk", "clean", "downloads"),
         icon = Icons.Outlined.DeleteSweep
+    ),
+    SettingsSearchEntry(
+        id = "auto_cache_cleanup",
+        title = "Automatic Cache Cleanup & Limit",
+        description = "Configure max cache ceiling, retention period, and P2P exit pruning",
+        category = SettingsCategory.Advanced,
+        page = SettingsPage.Storage,
+        keywords = listOf("auto clean", "cache limit", "eviction", "stale cache", "p2p cache", "storage"),
+        icon = Icons.Outlined.AutoDelete
     ),
     SettingsSearchEntry(
         id = "wifi_only_downloads",

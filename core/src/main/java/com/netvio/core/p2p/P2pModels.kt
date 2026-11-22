@@ -5,7 +5,7 @@ data class P2pSettingsUiState(
     val enableUpload: Boolean = true,
     val hideTorrentStats: Boolean = false,
     val torrentProfile: P2pTorrentProfile = P2pTorrentProfile.BALANCED,
-    val cacheSize: P2pCacheSize = P2pCacheSize.GB_2,
+    val cacheSize: P2pCacheSize = P2pCacheSize.MB_512,
 )
 
 enum class P2pTorrentProfile {
@@ -16,9 +16,32 @@ enum class P2pTorrentProfile {
 
 enum class P2pCacheSize(val bytes: Long) {
     NONE(0L),
+    MB_512(512L * 1024L * 1024L),
+    GB_1(1024L * 1024L * 1024L),
     GB_2(2L * 1024L * 1024L * 1024L),
     GB_5(5L * 1024L * 1024L * 1024L),
     GB_10(10L * 1024L * 1024L * 1024L),
+}
+
+object P2pStreamPolicy {
+    /**
+     * Determines whether a stream should be shown/considered based on user's P2P preference
+     * and active Debrid configuration.
+     * - Direct HTTPS/HLS/DASH streams are always included.
+     * - Torrent/magnet streams are included if P2P is enabled OR if an active Debrid service
+     *   can unrestrict them over HTTPS without joining a BitTorrent swarm.
+     */
+    fun shouldIncludeStream(
+        isTorrentStream: Boolean,
+        p2pEnabled: Boolean,
+        hasActiveDebrid: Boolean
+    ): Boolean {
+        if (!isTorrentStream) return true
+        return p2pEnabled || hasActiveDebrid
+    }
+
+    /** Native BitTorrent swarm streaming/downloading is strictly gated by [p2pEnabled]. */
+    fun canUseNativeP2p(p2pEnabled: Boolean): Boolean = p2pEnabled
 }
 
 data class P2pCacheUiState(

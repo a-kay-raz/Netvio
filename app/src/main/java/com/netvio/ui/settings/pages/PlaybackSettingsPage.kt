@@ -97,6 +97,7 @@ fun PlaybackSettingsPage(
     val hardwareAccel by viewModel.hardwareAcceleration.collectAsState()
     val smartFailover by viewModel.smartFailover.collectAsState()
     val audioPassthrough by viewModel.audioPassthrough.collectAsState()
+    val p2pStreamsEnabled by viewModel.p2pStreamsEnabled.collectAsState()
 
     var showResetDialog by remember { mutableStateOf(false) }
 
@@ -255,6 +256,15 @@ fun PlaybackSettingsPage(
             subtitle = "Bitstream Dolby & DTS surround audio directly to external AV receiver or soundbar without software conversion",
             checked = audioPassthrough,
             onCheckedChange = { viewModel.setAudioPassthrough(it) },
+            hazeState = hazeState
+        )
+
+        // 6. Allow P2P Torrent Streams Row
+        OpenSettingsToggleRow(
+            title = "Allow P2P torrent streams",
+            subtitle = "Include BitTorrent & magnet streams. Turn off to use direct HTTPS or Debrid streams only",
+            checked = p2pStreamsEnabled,
+            onCheckedChange = { viewModel.setP2pStreamsEnabled(it) },
             hazeState = hazeState
         )
 

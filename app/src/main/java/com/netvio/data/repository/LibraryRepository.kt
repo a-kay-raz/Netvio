@@ -27,6 +27,16 @@ class LibraryRepository(
     }
     private fun currentProfileId(): String = profileManager?.activeProfile?.value?.id ?: "default_user"
 
+    private suspend fun nextWatchlistTs(mediaId: String, profileId: String, now: Long): Long {
+        val raw = watchlistDao.getRawItem(mediaId, profileId)
+        return maxOf(now, (raw?.clientUpdatedAtMs ?: 0L) + 1L)
+    }
+
+    private suspend fun nextPlaybackTs(id: String, now: Long): Long {
+        val raw = playbackHistoryDao.getRawById(id)
+        return maxOf(now, maxOf(raw?.clientUpdatedAtMs ?: 0L, raw?.lastWatchedTimestamp ?: 0L) + 1L)
+    }
+
     val watchlist: Flow<List<WatchlistEntity>> =
         profileManager?.activeProfile?.flatMapLatest { profile ->
             watchlistDao.observeWatchlist(profile.id)
@@ -84,6 +94,7 @@ class LibraryRepository(
         if (existing != null) {
             watchlistDao.updateStatus(mediaDetail.id, status, profileId, now)
         } else {
+            val ts = nextWatchlistTs(mediaDetail.id, profileId, now)
             val entity = WatchlistEntity(
                 mediaId = mediaDetail.id,
                 profileId = profileId,
@@ -97,7 +108,7 @@ class LibraryRepository(
                 addedTimestamp = now,
                 isDirty = true,
                 isDeleted = false,
-                clientUpdatedAtMs = now
+                clientUpdatedAtMs = ts
             )
             watchlistDao.insert(entity)
         }
@@ -117,6 +128,7 @@ class LibraryRepository(
         if (existing != null) {
             watchlistDao.updateStatus(item.id, status, profileId, now)
         } else {
+            val ts = nextWatchlistTs(item.id, profileId, now)
             val entity = WatchlistEntity(
                 mediaId = item.id,
                 profileId = profileId,
@@ -130,7 +142,7 @@ class LibraryRepository(
                 addedTimestamp = now,
                 isDirty = true,
                 isDeleted = false,
-                clientUpdatedAtMs = now
+                clientUpdatedAtMs = ts
             )
             watchlistDao.insert(entity)
         }
@@ -149,10 +161,12 @@ class LibraryRepository(
         val now = System.currentTimeMillis()
         return if (exists) {
             watchlistDao.softDelete(item.id, profileId, now)
-            syncManagerProvider?.invoke()?.notifyWatchlistRemoved(item.id, item.title, item.type.name.contains("TV", ignoreCase = true))
+            val isTv = item.type.name.contains("TV", ignoreCase = true) || item.type.name.contains("ANIME", ignoreCase = true)
+            syncManagerProvider?.invoke()?.notifyWatchlistRemoved(item.id, item.title, isTv)
             notifyCloudSync()
             false
         } else {
+            val ts = nextWatchlistTs(item.id, profileId, now)
             val entity = WatchlistEntity(
                 mediaId = item.id,
                 profileId = profileId,
@@ -166,7 +180,7 @@ class LibraryRepository(
                 addedTimestamp = now,
                 isDirty = true,
                 isDeleted = false,
-                clientUpdatedAtMs = now
+                clientUpdatedAtMs = ts
             )
             watchlistDao.insert(entity)
             syncManagerProvider?.invoke()?.notifyWatchlistAdded(item)
@@ -181,10 +195,12 @@ class LibraryRepository(
         val now = System.currentTimeMillis()
         return if (exists) {
             watchlistDao.softDelete(mediaDetail.id, profileId, now)
-            syncManagerProvider?.invoke()?.notifyWatchlistRemoved(mediaDetail.id, mediaDetail.title, mediaDetail.type.name.contains("TV", ignoreCase = true))
+            val isTv = mediaDetail.type.name.contains("TV", ignoreCase = true) || mediaDetail.type.name.contains("ANIME", ignoreCase = true)
+            syncManagerProvider?.invoke()?.notifyWatchlistRemoved(mediaDetail.id, mediaDetail.title, isTv)
             notifyCloudSync()
             false
         } else {
+            val ts = nextWatchlistTs(mediaDetail.id, profileId, now)
             val entity = WatchlistEntity(
                 mediaId = mediaDetail.id,
                 profileId = profileId,
@@ -198,7 +214,7 @@ class LibraryRepository(
                 addedTimestamp = now,
                 isDirty = true,
                 isDeleted = false,
-                clientUpdatedAtMs = now
+                clientUpdatedAtMs = ts
             )
             watchlistDao.insert(entity)
             syncManagerProvider?.invoke()?.notifyWatchlistAdded(mediaDetail)
@@ -208,16 +224,35 @@ class LibraryRepository(
     }
 
     suspend fun removeFromWatchlist(mediaId: String) {
+        val profileId = currentProfileId()
         val now = System.currentTimeMillis()
-        watchlistDao.softDelete(mediaId, currentProfileId(), now)
-        syncManagerProvider?.invoke()?.notifyWatchlistRemoved(mediaId)
+        val existing = watchlistDao.getWatchlistItem(mediaId, profileId)
+        watchlistDao.softDelete(mediaId, profileId, now)
+        syncManagerProvider?.invoke()?.notifyWatchlistRemoved(
+            mediaId = mediaId,
+            title = existing?.title,
+            isTv = com.netvio.data.sync.TrackerReconciliationPolicy.isTvMediaType(existing?.mediaType)
+        )
         notifyCloudSync()
     }
 
     suspend fun removeFromWatchlistBatch(mediaIds: List<String>) {
         if (mediaIds.isNotEmpty()) {
+            val profileId = currentProfileId()
             val now = System.currentTimeMillis()
-            watchlistDao.softDeleteBatch(mediaIds, currentProfileId(), now)
+            val targetSet = mediaIds.toSet()
+            val removedMeta = watchlistDao.getAllWatchlist()
+                .filter { it.profileId == profileId && it.mediaId in targetSet }
+                .map {
+                    Triple(
+                        it.mediaId,
+                        it.title,
+                        com.netvio.data.sync.TrackerReconciliationPolicy.isTvMediaType(it.mediaType)
+                    )
+                }
+                .ifEmpty { mediaIds.map { Triple(it, null, false) } }
+            watchlistDao.softDeleteBatch(mediaIds, profileId, now)
+            syncManagerProvider?.invoke()?.notifyWatchlistRemovedBatch(removedMeta)
             notifyCloudSync()
         }
     }
@@ -226,7 +261,8 @@ class LibraryRepository(
         val profileId = currentProfileId()
         val now = System.currentTimeMillis()
         for (item in items) {
-            watchlistDao.insert(item.copy(profileId = profileId, isDirty = true, clientUpdatedAtMs = now))
+            val ts = nextWatchlistTs(item.mediaId, profileId, now)
+            watchlistDao.insert(item.copy(profileId = profileId, isDeleted = false, isDirty = true, clientUpdatedAtMs = ts))
         }
         notifyCloudSync()
     }
@@ -241,7 +277,15 @@ class LibraryRepository(
             } else {
                 PlaybackHistoryEntity.buildId(entity.provider, entity.mediaId, entity.seasonNumber, entity.episodeNumber, profileId)
             }
-            entity.copy(id = properId, profileId = profileId, isDirty = true, clientUpdatedAtMs = now)
+            val ts = nextPlaybackTs(properId, now)
+            entity.copy(
+                id = properId,
+                profileId = profileId,
+                isDeleted = false,
+                isDirty = true,
+                lastWatchedTimestamp = ts,
+                clientUpdatedAtMs = ts
+            )
         }
         playbackHistoryDao.upsertBatch(scoped)
         notifyCloudSync()
@@ -259,6 +303,7 @@ class LibraryRepository(
     ) {
         val profileId = currentProfileId()
         val now = System.currentTimeMillis()
+        val ts = nextWatchlistTs(mediaId, profileId, now)
         val entity = WatchlistEntity(
             mediaId = mediaId,
             profileId = profileId,
@@ -272,7 +317,7 @@ class LibraryRepository(
             addedTimestamp = now,
             isDirty = true,
             isDeleted = false,
-            clientUpdatedAtMs = now
+            clientUpdatedAtMs = ts
         )
         watchlistDao.insert(entity)
         notifyCloudSync()
@@ -288,7 +333,8 @@ class LibraryRepository(
         posterUrl: String?,
         provider: String? = null,
         mediaType: String? = null,
-        episodeData: String? = null
+        episodeData: String? = null,
+        notifyCloud: Boolean = true
     ) {
         val season = episodeItem?.seasonNumber
         val episode = episodeItem?.episodeNumber
@@ -306,7 +352,8 @@ class LibraryRepository(
             posterUrl = posterUrl,
             provider = provider,
             mediaType = mediaType,
-            episodeData = episodeData
+            episodeData = episodeData,
+            notifyCloud = notifyCloud
         )
     }
 
@@ -322,7 +369,8 @@ class LibraryRepository(
         posterUrl: String?,
         provider: String? = null,
         mediaType: String? = null,
-        episodeData: String? = null
+        episodeData: String? = null,
+        notifyCloud: Boolean = true
     ) {
         updatePlaybackProgressInternal(
             mediaId = mediaId,
@@ -336,7 +384,8 @@ class LibraryRepository(
             posterUrl = posterUrl,
             provider = provider,
             mediaType = mediaType,
-            episodeData = episodeData
+            episodeData = episodeData,
+            notifyCloud = notifyCloud
         )
     }
 
@@ -352,7 +401,8 @@ class LibraryRepository(
         posterUrl: String?,
         provider: String? = null,
         mediaType: String? = null,
-        episodeData: String? = null
+        episodeData: String? = null,
+        notifyCloud: Boolean = true
     ) {
         val profileId = currentProfileId()
         val id = PlaybackHistoryEntity.buildId(provider, mediaId, seasonNumber, episodeNumber, profileId)
@@ -385,6 +435,7 @@ class LibraryRepository(
             ?: cachedTmdb?.backdropUrl?.takeIf { it.isNotBlank() }
             ?: resolvedPoster
 
+        val ts = nextPlaybackTs(id, System.currentTimeMillis())
         val entity = PlaybackHistoryEntity(
             id = id,
             mediaId = mediaId,
@@ -396,21 +447,26 @@ class LibraryRepository(
             backdropUrl = resolvedBackdrop,
             currentPositionMs = currentPositionMs,
             durationMs = durationMs,
-            lastWatchedTimestamp = System.currentTimeMillis(),
+            lastWatchedTimestamp = ts,
             isCompleted = isCompleted,
             provider = provider,
             mediaType = mediaType,
             episodeData = episodeData,
             isDismissedFromContinueWatching = false,
-            profileId = profileId
+            profileId = profileId,
+            isDirty = true,
+            isDeleted = false,
+            clientUpdatedAtMs = ts
         )
 
         playbackHistoryDao.upsert(entity)
-        notifyCloudSync()
+        if (notifyCloud) {
+            notifyCloudSync()
+        }
 
-        // Synchronize Watchlist status if this media is bookmarked
+        // Synchronize Watchlist status if this media is bookmarked (never auto-complete whole TV series on one episode)
         if (watchlistDao.countWatchlist(mediaId, profileId) > 0) {
-            val watchlistStatus = if (isCompleted) "COMPLETED" else "WATCHING"
+            val watchlistStatus = if (isCompleted && !isTv) "COMPLETED" else "WATCHING"
             watchlistDao.updateStatus(mediaId, watchlistStatus, profileId)
         }
     }
@@ -495,12 +551,14 @@ class LibraryRepository(
         val now = System.currentTimeMillis()
         val existing = playbackHistoryDao.getProgress(id)
         if (existing != null) {
+            val ts = nextPlaybackTs(id, now)
             val updated = existing.copy(
                 isCompleted = true,
                 currentPositionMs = existing.durationMs.coerceAtLeast(existing.currentPositionMs),
-                lastWatchedTimestamp = now,
+                lastWatchedTimestamp = ts,
+                isDeleted = false,
                 isDirty = true,
-                clientUpdatedAtMs = now
+                clientUpdatedAtMs = ts
             )
             playbackHistoryDao.upsert(updated)
             if (watchlistDao.countWatchlist(existing.mediaId, profileId) > 0) {

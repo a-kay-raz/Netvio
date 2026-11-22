@@ -946,6 +946,7 @@ open class ProviderRepository(
         )
 
         val hasActiveDebrid = com.netvio.core.debrid.DebridManager.hasActiveDebrid()
+        val p2pEnabled = com.netvio.core.p2p.P2pSettingsRepository.isP2pEnabled()
         val seenUrls = mutableSetOf<String>()
         var sawLoading = false
         com.netvio.core.streams.StreamsRepository.uiState
@@ -961,6 +962,14 @@ open class ProviderRepository(
             .collect { state ->
                 for (group in state.groups) {
                     for (stream in group.streams) {
+                        if (!com.netvio.core.p2p.P2pStreamPolicy.shouldIncludeStream(
+                                isTorrentStream = stream.isTorrentStream,
+                                p2pEnabled = p2pEnabled,
+                                hasActiveDebrid = hasActiveDebrid
+                            )
+                        ) {
+                            continue
+                        }
                         val rawUrl = stream.playableDirectUrl ?: if (stream.isTorrentStream) stream.effectiveMagnetOrHash else null
                         val url = rawUrl ?: continue
                         if (seenUrls.add(url)) {
@@ -970,7 +979,14 @@ open class ProviderRepository(
                             } else {
                                 stream.streamLabel
                             }
-                            val serverLabel = if (stream.isTorrentStream) "$cleanServerName (${if (hasActiveDebrid) "Debrid/P2P" else "P2P"})" else cleanServerName
+                            val serverLabel = if (stream.isTorrentStream) {
+                                val tag = when {
+                                    hasActiveDebrid && p2pEnabled -> "Debrid/P2P"
+                                    hasActiveDebrid -> "Debrid"
+                                    else -> "P2P"
+                                }
+                                "$cleanServerName ($tag)"
+                            } else cleanServerName
                             val rawText = "${stream.name.orEmpty()} ${stream.title.orEmpty()} ${stream.quality.orEmpty()} ${stream.description.orEmpty()}"
                             val parsedHdr = when {
                                 rawText.contains("Dolby Vision", ignoreCase = true) || rawText.contains("DoVi", ignoreCase = true) || Regex("""\bDV\b""").containsMatchIn(rawText) -> "DV"
