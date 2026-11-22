@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.Key
@@ -142,10 +143,11 @@ fun IntegrationsSettingsPage(
     var isTraktValidating by remember { mutableStateOf(false) }
     var traktAuthError by remember { mutableStateOf<String?>(null) }
 
+    // Trakt Maintenance gate state (production Client ID / Secret pending)
+    var showTraktMaintenanceDialog by remember { mutableStateOf(false) }
+
     val openTraktConnect: () -> Unit = {
-        traktAuthError = null
-        isTraktValidating = false
-        showTraktConnectDialog = true
+        showTraktMaintenanceDialog = true
     }
 
     LaunchedEffect(traktToken, traktUsername) {
@@ -613,6 +615,20 @@ fun IntegrationsSettingsPage(
                     hazeState = hazeState
                 )
             }
+        }
+
+        // Trakt.tv Under Maintenance Glass Dialog
+        if (showTraktMaintenanceDialog) {
+            NetvioGlassDialog(
+                title = "Currently Under Maintenance",
+                message = "Trakt.tv sign-in and synchronization are temporarily offline while production API credentials are being finalized. Use Simkl above to sync your watchlist and playback history in the meantime.",
+                confirmText = "Got it",
+                dismissText = null,
+                icon = Icons.Outlined.Build,
+                hazeState = hazeState,
+                onConfirm = { showTraktMaintenanceDialog = false },
+                onDismiss = { showTraktMaintenanceDialog = false }
+            )
         }
 
         // Trakt Connect Glass Dialog
