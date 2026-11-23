@@ -1,6 +1,10 @@
 package com.netvio.core.network
 
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Cache
 import okhttp3.Call
 import okhttp3.ConnectionPool
@@ -15,6 +19,7 @@ import java.io.File
 import java.net.InetAddress
 import java.net.UnknownHostException
 import java.util.concurrent.Callable
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.ExecutorCompletionService
@@ -28,16 +33,22 @@ import java.util.regex.Pattern
  * Automatically bypasses ISP DNS poisoning, censorship, and DNS resolution failures
  * by querying Cloudflare (1.1.1.1) and Google (8.8.8.8) DoH endpoints over TLS.
  *
- * Implements in-memory TTL caching and graceful fallback to system DNS.
+ * Implements:
+ * - Zero-reflection JSON parsing (R8-safe & instant cold init)
+ * - Single-flight in-flight lookup coalescing (eliminates cold-start DNS thundering herds)
+ * - In-memory TTL caching (15 min) with stale-entry fallback
+ * - Parallel host prefetching and graceful fallback to system DNS
  */
 class DohDns(
-    private val timeoutSeconds: Long = 5
+    private val timeoutSeconds: Long = 3
 ) : Dns {
 
-    private val mapper = jacksonObjectMapper()
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
-    // Isolated bootstrap client connecting directly by raw IP
+    // Isolated bootstrap client connecting directly by raw IP with non-throttled dispatcher
     private val bootstrapClient: OkHttpClient = OkHttpClient.Builder()
+        .dispatcher(Dispatcher().apply { maxRequests = 32; maxRequestsPerHost = 12 })
+        .connectionPool(ConnectionPool(maxIdleConnections = 6, keepAliveDuration = 5, timeUnit = TimeUnit.MINUTES))
         .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
         .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
         .followRedirects(true)
@@ -49,6 +60,7 @@ class DohDns(
     )
 
     private val cache = ConcurrentHashMap<String, CacheEntry>()
+    private val inFlight = ConcurrentHashMap<String, CompletableFuture<List<InetAddress>>>()
 
     private val ipv4Pattern = Pattern.compile("""^(\d{1,3}\.){3}\d{1,3}$""")
 
@@ -87,28 +99,64 @@ class DohDns(
             return cached.addresses
         }
 
-        // 4. Concurrently race DoH endpoints: Cloudflare (1.1.1.1), Google (8.8.8.8), and Cloudflare Secondary (1.0.0.1)
-        var addresses = raceDoh(trimmed, timeoutSeconds)
-
-        // 5. Fallback: System DNS
-        if (addresses.isEmpty()) {
-            try {
-                addresses = Dns.SYSTEM.lookup(trimmed)
-            } catch (e: Exception) {
-                // If system DNS also fails and we had an expired cache, return the expired entry as fallback
-                if (cached != null && cached.addresses.isNotEmpty()) {
-                    return cached.addresses
-                }
-                throw UnknownHostException("Unable to resolve host '$trimmed' via DoH or System DNS: ${e.message}")
+        // 4. Single-flight coalescing: if multiple threads request the same host simultaneously,
+        // only ONE performs the DoH race while all others await the shared future.
+        val createdFuture = CompletableFuture<List<InetAddress>>()
+        val existingFuture = inFlight.putIfAbsent(trimmed, createdFuture)
+        if (existingFuture != null) {
+            val shared = try {
+                existingFuture.get(timeoutSeconds + 2, TimeUnit.SECONDS)
+            } catch (_: Exception) {
+                emptyList()
             }
+            if (shared.isNotEmpty()) return shared
+            if (cached != null && cached.addresses.isNotEmpty()) return cached.addresses
         }
 
-        // Cache valid results for at least 60 seconds (up to 30 minutes)
-        if (addresses.isNotEmpty()) {
-            cache[trimmed] = CacheEntry(
-                addresses = addresses,
-                expiresAtMs = now + TimeUnit.MINUTES.toMillis(5)
-            )
+        val addresses = try {
+            // Concurrently race DoH endpoints: Cloudflare (1.1.1.1), Google (8.8.8.8), and Cloudflare Secondary (1.0.0.1)
+            var resolved = raceDoh(trimmed, timeoutSeconds)
+
+            // Fallback: System DNS
+            if (resolved.isEmpty()) {
+                try {
+                    resolved = Dns.SYSTEM.lookup(trimmed)
+                } catch (e: Exception) {
+                    if (cached != null && cached.addresses.isNotEmpty()) {
+                        resolved = cached.addresses
+                    } else {
+                        if (existingFuture == null) {
+                            createdFuture.complete(emptyList())
+                            inFlight.remove(trimmed, createdFuture)
+                        }
+                        throw UnknownHostException("Unable to resolve host '$trimmed' via DoH or System DNS: ${e.message}")
+                    }
+                }
+            }
+
+            if (resolved.isNotEmpty()) {
+                cache[trimmed] = CacheEntry(
+                    addresses = resolved,
+                    expiresAtMs = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(15)
+                )
+            }
+            if (existingFuture == null) {
+                createdFuture.complete(resolved)
+                inFlight.remove(trimmed, createdFuture)
+            }
+            resolved
+        } catch (e: UnknownHostException) {
+            throw e
+        } catch (t: Throwable) {
+            if (existingFuture == null) {
+                createdFuture.complete(emptyList())
+                inFlight.remove(trimmed, createdFuture)
+            }
+            if (cached != null && cached.addresses.isNotEmpty()) {
+                cached.addresses
+            } else {
+                throw UnknownHostException("Unable to resolve host '$trimmed': ${t.message}")
+            }
         }
 
         return addresses
@@ -192,21 +240,21 @@ class DohDns(
         }
     }
 
-    private fun parseDnsJson(json: String, hostname: String): List<InetAddress> {
+    internal fun parseDnsJson(jsonStr: String, hostname: String): List<InetAddress> {
         return try {
-            val root = mapper.readTree(json)
-            val status = root.path("Status").asInt(-1)
+            val root = json.parseToJsonElement(jsonStr).jsonObject
+            val status = root["Status"]?.jsonPrimitive?.intOrNull ?: -1
             if (status != 0) return emptyList()
 
-            val answerNode = root.path("Answer")
-            if (!answerNode.isArray) return emptyList()
+            val answerNode = root["Answer"]?.jsonArray ?: return emptyList()
 
             val list = mutableListOf<InetAddress>()
-            for (node in answerNode) {
-                val type = node.path("type").asInt()
+            for (elem in answerNode) {
+                val obj = elem.jsonObject
+                val type = obj["type"]?.jsonPrimitive?.intOrNull ?: continue
                 // type 1 is DNS Type A (IPv4)
                 if (type == 1) {
-                    val ipStr = node.path("data").asText()
+                    val ipStr = obj["data"]?.jsonPrimitive?.content ?: continue
                     if (ipv4Pattern.matcher(ipStr).matches()) {
                         try {
                             val raw = InetAddress.getByName(ipStr).address
@@ -222,16 +270,16 @@ class DohDns(
     }
 
     /**
-     * Prefetches DNS records in the background so cold network hops have zero DNS delay.
+     * Prefetches DNS records concurrently in the background so cold network hops have zero DNS delay.
      */
     fun prefetch(vararg hosts: String) {
-        Thread {
-            for (h in hosts) {
+        for (h in hosts) {
+            dohExecutor.execute {
                 try {
                     lookup(h)
                 } catch (_: Throwable) {}
             }
-        }.start()
+        }
     }
 
     companion object {
@@ -241,7 +289,7 @@ class DohDns(
 
         val DEFAULT = DohDns()
 
-        val defaultPool = ConnectionPool(maxIdleConnections = 10, keepAliveDuration = 5, timeUnit = TimeUnit.MINUTES)
+        val defaultPool = ConnectionPool(maxIdleConnections = 16, keepAliveDuration = 5, timeUnit = TimeUnit.MINUTES)
         val defaultDispatcher = Dispatcher().apply { maxRequests = 128; maxRequestsPerHost = 32 }
 
         /** Root shared client. All derived clients share this connection pool, dispatcher, and SSL session cache. */
@@ -252,8 +300,8 @@ class DohDns(
                 .connectionPool(defaultPool)
                 .dispatcher(defaultDispatcher)
                 .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(45, TimeUnit.SECONDS)
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(25, TimeUnit.SECONDS)
                 .followRedirects(true)
                 .followSslRedirects(true)
                 .retryOnConnectionFailure(true)
@@ -288,7 +336,7 @@ class DohDns(
             } catch (_: Throwable) {}
         }
 
-        /** Client optimized for metadata (TMDB, AniList) with disk cache if initialized */
+        /** Client optimized for metadata (TMDB, AniList, Cinemeta) with disk cache if initialized */
         val metadataClient: OkHttpClient
             get() = cachedClient ?: sharedBaseClient
 
@@ -318,10 +366,18 @@ private object ForceCacheInterceptor : Interceptor {
         val req = chain.request()
         val resp = chain.proceed(req)
         val host = req.url.host
-        if (req.method != "GET" || (host != "api.themoviedb.org" && host != "euthopiar-vault.sehgalvansh716.workers.dev") || !resp.isSuccessful) return resp
+        val isCacheableMetadataHost = host == "api.themoviedb.org" ||
+            host == "euthopiar-vault.sehgalvansh716.workers.dev" ||
+            host == "v3-cinemeta.strem.io"
+        if (req.method != "GET" || !isCacheableMetadataHost || !resp.isSuccessful) return resp
+        // Strip upstream CloudFront/CDN `Age`, `Expires`, and `Pragma` headers!
+        // Upstream CloudFront often sends `Age: 15000+` which causes OkHttp's RFC 7234 freshness check
+        // to mark newly-cached responses as immediately expired (100% cache miss on every page).
         return resp.newBuilder()
             .removeHeader("Pragma")
-            .header("Cache-Control", "public, max-age=600, stale-while-revalidate=86400")
+            .removeHeader("Age")
+            .removeHeader("Expires")
+            .header("Cache-Control", "public, max-age=1800, stale-while-revalidate=86400")
             .build()
     }
 }

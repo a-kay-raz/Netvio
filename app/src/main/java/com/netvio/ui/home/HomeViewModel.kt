@@ -551,7 +551,9 @@ class HomeViewModel(
             .filter { !it.backdropUrl.isNullOrBlank() || !it.posterUrl.isNullOrBlank() }
             .distinctBy { it.id }
 
-        val candidates = rawCandidates
+        // Indian TV serials are filtered out of hero candidates: Netvio's
+        // catalog is Indian-only, so this always applies (no region system).
+        val candidates = rawCandidates.filterNot { com.netvio.core.util.TmdbBridge.isIndianTvSerial(it) }
 
         val candidatesWithLogos = candidates.filter { !it.logoUrl.isNullOrBlank() }.shuffled(providerRandom)
         val otherCandidates = candidates.filter { it.logoUrl.isNullOrBlank() }.shuffled(providerRandom)
@@ -643,15 +645,15 @@ class HomeViewModel(
             rowsByTab = rowsMap
         )
 
-        // 5. Preload images asynchronously in background without blocking UI
+        // 5. Preload above-the-fold hero & first two rows gently without flooding Coil's network queue
         viewModelScope.launch(Dispatchers.IO) {
             val app = getApplication<Application>()
             val imageLoader = app.imageLoader
 
-            val heroUrls = heroItems.flatMap { item ->
+            val heroUrls = heroItems.take(2).flatMap { item ->
                 listOfNotNull(item.backdropUrl, item.logoUrl)
             }
-            val visiblePosterUrls = rows.take(4).flatMap { it.items.take(8) }
+            val visiblePosterUrls = rows.take(2).flatMap { it.items.take(6) }
                 .mapNotNull { it.posterUrl }
 
             val allPreloadUrls = (heroUrls + visiblePosterUrls).distinct()
@@ -699,7 +701,6 @@ class HomeViewModel(
         // network fetch. Bounded (20 items), sequential with a small
         // gap so it never saturates the connection, and cancelled on
         // the next catalog load.
-        warmupJob?.cancel()
         warmupJob?.cancel()
         warmupJob = viewModelScope.launch(Dispatchers.IO) {
             val candidates = (heroItems + rows.take(4).flatMap { it.items.take(6) })

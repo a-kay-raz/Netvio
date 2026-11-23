@@ -59,7 +59,7 @@ class AppCacheManagerTest {
     }
 
     @Test
-    fun runMaintenanceInDirectories_cleansStaleTempsTtlLruPriorityAndProtectsDownloads() {
+    fun runMaintenanceInDirectories_cleansUnmanagedCachesAndNeverCorruptsDiskLruCachesOrSystemFiles() {
         val cacheRoot = tempFolder.newFolder("app_cache")
         val downloadDir = tempFolder.newFolder("offline_downloads")
         val nowMs = 1_750_000_000_000L
@@ -75,15 +75,28 @@ class AppCacheManagerTest {
         val orphanSeqDir = File(cacheRoot, "seq_stream_orphan_99").apply { mkdirs() }
         createSizedFile(orphanSeqDir, "chunk_0.bin", 4096, nowMs - 5 * dayMs)
 
-        // 3. Stale P2P & Video files (> 7d), fresh image (< 14d), and protected downloads
+        // 3. Stale P2P files (> 7d) vs fresh P2P files
         val p2pDir = File(cacheRoot, "nuvio-engine").apply { mkdirs() }
         val oldP2pFile = createSizedFile(p2pDir, "piece_old.dat", 8192, nowMs - 9 * dayMs)
         val freshP2pFile = createSizedFile(p2pDir, "piece_fresh.dat", 4096, nowMs - 1 * dayMs)
 
+        // 4. Managed DiskLruCache stores (Coil image_cache & OkHttp http_cache) — MUST NEVER be mutated directly
         val imageDir = File(cacheRoot, "image_cache").apply { mkdirs() }
         val coilJournal = createSizedFile(imageDir, "journal", 512, nowMs - 30 * dayMs)
-        val posterTenDaysOld = createSizedFile(imageDir, "poster_10d.img", 2048, nowMs - 10 * dayMs)
+        val oldPosterHeader = createSizedFile(imageDir, "abc123.0", 256, nowMs - 30 * dayMs)
+        val oldPosterBody = createSizedFile(imageDir, "abc123.1", 4096, nowMs - 30 * dayMs)
 
+        val httpDir = File(cacheRoot, "http_cache").apply { mkdirs() }
+        val httpJournal = createSizedFile(httpDir, "journal", 512, nowMs - 30 * dayMs)
+        val oldMetaHeader = createSizedFile(httpDir, "def456.0", 256, nowMs - 30 * dayMs)
+        val oldMetaBody = createSizedFile(httpDir, "def456.1", 2048, nowMs - 30 * dayMs)
+
+        // 5. Android / Room system files inside cacheDir — MUST NEVER be touched or counted
+        val roomLock = createSizedFile(cacheRoot, "euthopiar_database.lck", 64, nowMs - 40 * dayMs)
+        val oatDir = File(cacheRoot, "oat_primary").apply { mkdirs() }
+        val oatFile = createSizedFile(oatDir, "base.odex", 8192, nowMs - 40 * dayMs)
+
+        // 6. Protected user offline downloads
         val downloadedMovie = createSizedFile(downloadDir, "movie.mp4", 16384, nowMs - 30 * dayMs)
 
         val report = AppCacheManager.runMaintenanceInDirectories(
@@ -95,30 +108,52 @@ class AppCacheManagerTest {
             freeDiskBytes = 10L * 1024L * mb,
             nowMs = nowMs,
             activeSeqSessionDirName = "seq_stream_active_1",
-            isP2pActive = false
+            isP2pActive = false,
+            isStreamCacheOpen = false
         )
 
+        // Unmanaged stale files cleaned
         assertFalse(staleApk.exists())
         assertTrue(freshApk.exists())
         assertFalse(orphanSeqDir.exists())
         assertTrue(activeChunk.exists())
         assertFalse(oldP2pFile.exists())
         assertTrue(freshP2pFile.exists())
+
+        // Managed DiskLruCache paired files & journals untouched (zero corruption!)
         assertTrue(coilJournal.exists())
-        // Images get at least a 14-day retention window so 10-day-old posters stay cached
-        assertTrue(posterTenDaysOld.exists())
+        assertTrue(oldPosterHeader.exists())
+        assertTrue(oldPosterBody.exists())
+        assertTrue(httpJournal.exists())
+        assertTrue(oldMetaHeader.exists())
+        assertTrue(oldMetaBody.exists())
+
+        // Room lock, ART oat_primary, and user downloads untouched
+        assertTrue(roomLock.exists())
+        assertTrue(oatFile.exists())
         assertTrue(downloadedMovie.exists())
+
+        // Breakdown must not count Room lock or oat_primary
+        val breakdown = AppCacheManager.inspectDirectoriesBreakdown(
+            cacheRoot = cacheRoot,
+            externalCacheRoots = emptyList(),
+            excludedCanonicalPaths = setOf(downloadDir.canonicalPath)
+        )
+        assertEquals(2048L + 512L + 256L + 2048L, breakdown.metadataAndTempBytes)
         assertTrue(report.reclaimedBytes >= 2048L + 4096L + 8192L)
         assertFalse(report.lowStorageTriggered)
     }
 
     @Test
-    fun runMaintenanceInDirectories_respectsActiveP2pStreamLock() {
-        val cacheRoot = tempFolder.newFolder("app_cache_active_p2p")
+    fun runMaintenanceInDirectories_respectsActiveP2pAndOpenStreamCacheLocks() {
+        val cacheRoot = tempFolder.newFolder("app_cache_active_locks")
         val nowMs = 1_750_000_000_000L
 
         val p2pDir = File(cacheRoot, "nuvio-engine").apply { mkdirs() }
         val activeTorrentChunk = createSizedFile(p2pDir, "active_piece.dat", 8192, nowMs - 20 * dayMs)
+
+        val streamDir = File(cacheRoot, "stream_cache").apply { mkdirs() }
+        val activeVideoChunk = createSizedFile(streamDir, "chunk_active.exo", 8192, nowMs - 20 * dayMs)
 
         AppCacheManager.runMaintenanceInDirectories(
             cacheRoot = cacheRoot,
@@ -126,13 +161,15 @@ class AppCacheManagerTest {
             excludedCanonicalPaths = emptySet(),
             maxCacheLimitMb = 250,
             retentionDays = 1,
-            freeDiskBytes = 100L * mb, // low storage triggered
+            freeDiskBytes = 100L * mb,
             nowMs = nowMs,
             activeSeqSessionDirName = null,
-            isP2pActive = true
+            isP2pActive = true,
+            isStreamCacheOpen = true
         )
 
         assertTrue("Active P2P cache must never be deleted mid-stream", activeTorrentChunk.exists())
+        assertTrue("Open ExoPlayer SimpleCache must never be deleted mid-playback", activeVideoChunk.exists())
     }
 
     private fun createSizedFile(parent: File, name: String, bytes: Int, lastModifiedMs: Long): File {

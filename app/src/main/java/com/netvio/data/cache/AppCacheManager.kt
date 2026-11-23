@@ -18,10 +18,9 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.file.Files
 
-private const val KB = 1024L
 private const val MB = 1024L * 1024L
 private const val DAY_MS = 24L * 60L * 60L * 1000L
-private const val AUTO_MAINTENANCE_INTERVAL_MS = 6L * 60L * 60L * 1000L
+private const val AUTO_MAINTENANCE_INTERVAL_MS = 12L * 60L * 60L * 1000L
 private const val LOW_STORAGE_FREE_THRESHOLD_BYTES = 512L * MB
 private const val LOW_STORAGE_BUDGET_CAP_BYTES = 150L * MB
 
@@ -103,10 +102,26 @@ object SmartCachePolicy {
     }
 }
 
+/**
+ * Central Smart Cache Manager for Euthopiar.
+ *
+ * Critical safety invariants:
+ * 1. NEVER directly delete individual files or directories inside live DiskLruCache stores
+ *    (`image_cache/` owned by Coil 3 and `http_cache/` owned by OkHttp). Doing so corrupts their
+ *    paired `.0`/`.1` entries & `journal`, breaking disk cache reads/writes for the entire session.
+ *    Always let Coil & OkHttp enforce their own native LRU `maxSizeBytes`, and only evict them
+ *    through their official APIs (`diskCache.clear()` / `DohDns.evictHttpCache()`).
+ * 2. ONLY prune files inside explicitly allowlisted unmanaged app cache subdirectories (`updates/`,
+ *    `seq_stream_*`, `nuvio-engine/`, `torrent_meta/`, and closed `stream_cache/`). NEVER touch
+ *    Android/ART/Room system artifacts in `cacheDir` (such as `euthopiar_database.lck`, `oat_primary/`,
+ *    `profileinstaller/`, or WebView caches).
+ * 3. NEVER touch offline user downloads (`DownloadEngine.getDownloadDirectory()`).
+ */
 object AppCacheManager {
 
     private const val PREFS_NAME = "smart_cache_prefs"
     private const val KEY_COIL_CAP_BYTES = "coil_cap_bytes"
+    private const val KEY_LAST_CHECK_MS = "last_auto_check_ms"
     private val maintenanceMutex = Mutex()
 
     private const val DIR_IMAGE_CACHE = "image_cache"
@@ -180,25 +195,24 @@ object AppCacheManager {
     ): CacheBreakdown {
         val visited = mutableSetOf<String>()
 
-        val imagesBytes = getDirSizeSafely(File(cacheRoot, DIR_IMAGE_CACHE), visited, excludedCanonicalPaths)
+        val imagesBytes = getDirSizeFast(File(cacheRoot, DIR_IMAGE_CACHE), visited, excludedCanonicalPaths)
 
-        var videoBytes = getDirSizeSafely(File(cacheRoot, DIR_STREAM_CACHE), visited, excludedCanonicalPaths)
+        var videoBytes = getDirSizeFast(File(cacheRoot, DIR_STREAM_CACHE), visited, excludedCanonicalPaths)
         cacheRoot.listFiles()?.forEach { child ->
             if (child.isDirectory && child.name.startsWith(DIR_SEQ_PREFIX)) {
-                videoBytes += getDirSizeSafely(child, visited, excludedCanonicalPaths)
+                videoBytes += getDirSizeFast(child, visited, excludedCanonicalPaths)
             }
         }
 
-        val p2pBytes = getDirSizeSafely(File(cacheRoot, DIR_P2P_ENGINE), visited, excludedCanonicalPaths) +
-            getDirSizeSafely(File(cacheRoot, DIR_P2P_META), visited, excludedCanonicalPaths)
+        val p2pBytes = getDirSizeFast(File(cacheRoot, DIR_P2P_ENGINE), visited, excludedCanonicalPaths) +
+            getDirSizeFast(File(cacheRoot, DIR_P2P_META), visited, excludedCanonicalPaths)
 
+        // Only measure our managed HTTP cache & update APKs — never count ART oat_primary or Room .lck files
         var metadataBytes = 0L
-        metadataBytes += getDirSizeSafely(File(cacheRoot, DIR_HTTP_CACHE), visited, excludedCanonicalPaths)
-        metadataBytes += getDirSizeSafely(File(cacheRoot, DIR_UPDATES), visited, excludedCanonicalPaths)
-        // Count any other cache files in cacheRoot that were not already visited by known buckets
-        metadataBytes += getDirSizeSafely(cacheRoot, visited, excludedCanonicalPaths)
+        metadataBytes += getDirSizeFast(File(cacheRoot, DIR_HTTP_CACHE), visited, excludedCanonicalPaths)
+        metadataBytes += getDirSizeFast(File(cacheRoot, DIR_UPDATES), visited, excludedCanonicalPaths)
         for (extRoot in externalCacheRoots) {
-            metadataBytes += getDirSizeSafely(extRoot, visited, excludedCanonicalPaths)
+            metadataBytes += getDirSizeFast(File(extRoot, DIR_UPDATES), visited, excludedCanonicalPaths)
         }
 
         return CacheBreakdown(
@@ -221,14 +235,13 @@ object AppCacheManager {
 
             when (category) {
                 CacheCategory.IMAGES -> {
+                    // Use Coil's official DiskCache & MemoryCache clear APIs so the live
+                    // DiskLruCache journal stays intact and future poster caching keeps working!
                     try {
                         val imageLoader = SingletonImageLoader.get(appCtx)
                         imageLoader.diskCache?.clear()
                         imageLoader.memoryCache?.clear()
                     } catch (_: Throwable) {}
-                    if (cacheRoot != null) {
-                        deleteDirSafely(File(cacheRoot, DIR_IMAGE_CACHE), mutableSetOf(), excludes, isRoot = false)
-                    }
                 }
                 CacheCategory.VIDEO_BUFFERS -> {
                     try {
@@ -247,32 +260,21 @@ object AppCacheManager {
                     } catch (_: Throwable) {}
                 }
                 CacheCategory.METADATA_AND_TEMP -> {
+                    // Evict OkHttp cache through its official API so the live DiskLruCache stays valid!
                     try {
                         DohDns.evictHttpCache()
                     } catch (_: Throwable) {}
                     if (cacheRoot != null) {
                         deleteDirSafely(File(cacheRoot, DIR_UPDATES), mutableSetOf(), excludes, isRoot = false)
-                        deleteDirSafely(File(cacheRoot, DIR_HTTP_CACHE), mutableSetOf(), excludes, isRoot = false)
-                        cacheRoot.listFiles()?.forEach { child ->
-                            if (!isDedicatedManagedSubdir(child.name)) {
-                                if (child.isDirectory) {
-                                    deleteDirSafely(child, mutableSetOf(), excludes, isRoot = false)
-                                } else if (!isExcludedCanonical(child, excludes)) {
-                                    child.delete()
-                                }
-                            }
-                        }
                     }
                     try {
                         appCtx.externalCacheDirs?.filterNotNull()?.forEach { extDir ->
-                            deleteDirSafely(extDir, mutableSetOf(), excludes, isRoot = true)
+                            deleteDirSafely(File(extDir, DIR_UPDATES), mutableSetOf(), excludes, isRoot = false)
                         }
                     } catch (_: Exception) {}
                 }
             }
 
-            try { appCtx.cacheDir?.mkdirs() } catch (_: Exception) {}
-            try { appCtx.externalCacheDir?.mkdirs() } catch (_: Exception) {}
             val after = inspectBreakdown(appCtx).bytesFor(category)
             (before - after).coerceAtLeast(0L)
         }
@@ -282,49 +284,46 @@ object AppCacheManager {
         val appCtx = context.applicationContext
         val before = inspectBreakdown(appCtx).totalBytes
         maintenanceMutex.withLock {
+            val excludes = resolveExcludedPaths(appCtx)
+            val cacheRoot = appCtx.cacheDir
+
+            // 1. Video playback buffers (release SimpleCache first, then remove stream_cache & orphaned seq dirs)
             try {
                 StreamingPlaybackCacheManager.release()
             } catch (_: Throwable) {}
             try {
+                SequentialStreamManager.cleanOrphanedCache(appCtx)
+            } catch (_: Throwable) {}
+            if (cacheRoot != null) {
+                deleteDirSafely(File(cacheRoot, DIR_STREAM_CACHE), mutableSetOf(), excludes, isRoot = false)
+            }
+
+            // 2. Managed HTTP metadata cache (official OkHttp evictAll — never delete folder out from under client!)
+            try {
                 DohDns.evictHttpCache()
             } catch (_: Throwable) {}
+
+            // 3. Managed Coil image cache (official Coil clear — never delete folder out from under ImageLoader!)
             try {
                 val imageLoader = SingletonImageLoader.get(appCtx)
                 imageLoader.diskCache?.clear()
                 imageLoader.memoryCache?.clear()
             } catch (_: Throwable) {}
+
+            // 4. P2P torrent cache (only when idle)
             try {
                 P2pStreamingEngine.clearCacheIfIdle(appCtx)
             } catch (_: Throwable) {}
-            try {
-                SequentialStreamManager.cleanOrphanedCache(appCtx)
-            } catch (_: Throwable) {}
 
-            val excludes = resolveExcludedPaths(appCtx)
-            val visited = mutableSetOf<String>()
-            appCtx.cacheDir?.let { root ->
-                root.listFiles()?.forEach { child ->
-                    // Keep active SequentialStreamSession directory or active P2P cache if streaming
-                    val isActiveSeq = child.name == SequentialStreamManager.activeSessionDirName()
-                    val isProtectedP2p = (child.name == DIR_P2P_ENGINE || child.name == DIR_P2P_META) &&
-                        P2pStreamingEngine.isStreamActive()
-                    if (!isActiveSeq && !isProtectedP2p) {
-                        if (child.isDirectory) {
-                            deleteDirSafely(child, visited, excludes, isRoot = false)
-                        } else if (!isExcludedCanonical(child, excludes)) {
-                            child.delete()
-                        }
-                    }
-                }
+            // 5. Stale OTA update APKs
+            if (cacheRoot != null) {
+                deleteDirSafely(File(cacheRoot, DIR_UPDATES), mutableSetOf(), excludes, isRoot = false)
             }
             try {
                 appCtx.externalCacheDirs?.filterNotNull()?.forEach { extDir ->
-                    deleteDirSafely(extDir, visited, excludes, isRoot = true)
+                    deleteDirSafely(File(extDir, DIR_UPDATES), mutableSetOf(), excludes, isRoot = false)
                 }
             } catch (_: Exception) {}
-
-            try { appCtx.cacheDir?.mkdirs() } catch (_: Exception) {}
-            try { appCtx.externalCacheDir?.mkdirs() } catch (_: Exception) {}
         }
         val after = inspectBreakdown(appCtx).totalBytes
         (before - after).coerceAtLeast(0L)
@@ -346,6 +345,21 @@ object AppCacheManager {
     ): CacheCleanupReport = withContext(Dispatchers.IO) {
         maintenanceMutex.withLock {
             val appCtx = context.applicationContext
+            val nowMs = System.currentTimeMillis()
+            val fastPrefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val lastFastCheckMs = fastPrefs.getLong(KEY_LAST_CHECK_MS, 0L)
+            val cacheRoot = appCtx.cacheDir ?: return@withLock CacheCleanupReport(0L, 0L, 0, false)
+            val freeDiskBytes = try { cacheRoot.usableSpace } catch (_: Exception) { 0L }
+            val isLowDisk = freeDiskBytes in 1L until LOW_STORAGE_FREE_THRESHOLD_BYTES
+
+            // Fast-path skip on routine launches so we don't even hit DataStore or walk cache dirs
+            if (!force && !isLowDisk && lastFastCheckMs > 0L && (nowMs - lastFastCheckMs) < AUTO_MAINTENANCE_INTERVAL_MS) {
+                val excludes = resolveExcludedPaths(appCtx)
+                val activeSeqDir = SequentialStreamManager.activeSessionDirName()
+                val hygiene = runSafeTempHygieneOnly(cacheRoot, excludes, nowMs, activeSeqDir)
+                return@withLock hygiene
+            }
+
             val prefsRepo = PreferencesRepository.getInstance(appCtx)
             val autoEnabled = prefsRepo.autoCacheCleanupEnabled.first()
             val maxLimitMb = prefsRepo.maxCacheLimitMb.first()
@@ -355,48 +369,42 @@ object AppCacheManager {
 
             applySubsystemCaps(appCtx, maxLimitMb, p2pEnabled)
 
-            val cacheRoot = appCtx.cacheDir ?: return@withLock CacheCleanupReport(0L, 0L, 0, false)
             val extRoots = try {
                 appCtx.externalCacheDirs?.filterNotNull().orEmpty()
             } catch (_: Exception) {
                 emptyList()
             }
             val excludes = resolveExcludedPaths(appCtx)
-            val freeDiskBytes = try { cacheRoot.usableSpace } catch (_: Exception) { 0L }
-            val nowMs = System.currentTimeMillis()
             val (budgetBytes, lowStorage) = SmartCachePolicy.effectiveBudgetBytes(maxLimitMb, freeDiskBytes)
 
-            val currentBreakdown = inspectDirectoriesBreakdown(cacheRoot, extRoots, excludes)
             val activeSeqDir = SequentialStreamManager.activeSessionDirName()
             val isP2pActive = P2pStreamingEngine.isStreamActive()
+            val isStreamCacheOpen = StreamingPlaybackCacheManager.isCacheOpen()
+
+            fastPrefs.edit().putLong(KEY_LAST_CHECK_MS, nowMs).apply()
 
             if (!autoEnabled && !force) {
-                // Even if user turns off full auto-cleanup, always delete stale update APKs (>24h) and orphaned seq buffers.
                 val tempReport = runSafeTempHygieneOnly(
                     cacheRoot = cacheRoot,
                     excludedCanonicalPaths = excludes,
                     nowMs = nowMs,
                     activeSeqSessionDirName = activeSeqDir
                 )
-                return@withLock tempReport.copy(
-                    remainingBytes = inspectDirectoriesBreakdown(cacheRoot, extRoots, excludes).totalBytes,
-                    lowStorageTriggered = lowStorage
-                )
+                return@withLock tempReport.copy(lowStorageTriggered = lowStorage)
             }
 
+            val currentBreakdown = inspectDirectoriesBreakdown(cacheRoot, extRoots, excludes)
             val intervalElapsed = (nowMs - lastCleanupMs) >= AUTO_MAINTENANCE_INTERVAL_MS
             val overBudget = currentBreakdown.totalBytes > budgetBytes
             if (!force && !intervalElapsed && !overBudget && !lowStorage) {
-                // Still prune stale APKs/seq dirs cheaply on startup
                 val hygieneReport = runSafeTempHygieneOnly(
                     cacheRoot = cacheRoot,
                     excludedCanonicalPaths = excludes,
                     nowMs = nowMs,
                     activeSeqSessionDirName = activeSeqDir
                 )
-                val remaining = inspectDirectoriesBreakdown(cacheRoot, extRoots, excludes).totalBytes
                 return@withLock hygieneReport.copy(
-                    remainingBytes = remaining,
+                    remainingBytes = (currentBreakdown.totalBytes - hygieneReport.reclaimedBytes).coerceAtLeast(0L),
                     lowStorageTriggered = lowStorage
                 )
             }
@@ -410,7 +418,9 @@ object AppCacheManager {
                 freeDiskBytes = freeDiskBytes,
                 nowMs = nowMs,
                 activeSeqSessionDirName = activeSeqDir,
-                isP2pActive = isP2pActive
+                isP2pActive = isP2pActive,
+                isStreamCacheOpen = isStreamCacheOpen,
+                onEvictHttpCache = if (lowStorage) { { DohDns.evictHttpCache() } } else null
             )
 
             try {
@@ -449,7 +459,7 @@ object AppCacheManager {
 
         cacheRoot.listFiles()?.forEach { child ->
             if (child.isDirectory && child.name.startsWith(DIR_SEQ_PREFIX) && child.name != activeSeqSessionDirName) {
-                val sz = getDirSizeSafely(child, mutableSetOf(), excludedCanonicalPaths)
+                val sz = getDirSizeFast(child, mutableSetOf(), excludedCanonicalPaths)
                 if (deleteDirSafely(child, mutableSetOf(), excludedCanonicalPaths, isRoot = false)) {
                     reclaimed += sz
                     deletedCount++
@@ -474,7 +484,9 @@ object AppCacheManager {
         freeDiskBytes: Long,
         nowMs: Long,
         activeSeqSessionDirName: String? = null,
-        isP2pActive: Boolean = false
+        isP2pActive: Boolean = false,
+        isStreamCacheOpen: Boolean = false,
+        onEvictHttpCache: (() -> Unit)? = null
     ): CacheCleanupReport {
         val beforeTotal = inspectDirectoriesBreakdown(cacheRoot, externalCacheRoots, excludedCanonicalPaths).totalBytes
         var reclaimed = 0L
@@ -485,9 +497,10 @@ object AppCacheManager {
         reclaimed += hygiene.reclaimedBytes
         deletedCount += hygiene.deletedFilesCount
 
-        // Pass 2: Age / TTL pruning aligned with user expectations
+        // Pass 2: Age / TTL pruning STRICTLY inside unmanaged app directories.
+        // NEVER touch files directly inside `image_cache/` (Coil DiskLruCache) or `http_cache/` (OkHttp DiskLruCache)
+        // — both enforce their own strict native LRU caps and paired `.0`/`.1` journal integrity.
         val genericCutoffMs = nowMs - retentionDays.coerceIn(1, 90).toLong() * DAY_MS
-        val imageCutoffMs = nowMs - maxOf(retentionDays.coerceIn(1, 90), 14).toLong() * DAY_MS
 
         if (!isP2pActive) {
             val (r1, c1) = pruneFilesOlderThan(
@@ -506,47 +519,21 @@ object AppCacheManager {
             deletedCount += c1 + c2
         }
 
-        val (rv, cv) = pruneFilesOlderThan(
-            dir = File(cacheRoot, DIR_STREAM_CACHE),
-            cutoffMs = genericCutoffMs,
-            excludedCanonicalPaths = excludedCanonicalPaths,
-            skipFileNames = setOf("cached_content_index.exi")
-        )
-        reclaimed += rv
-        deletedCount += cv
-
-        val (rm, cm) = pruneFilesOlderThan(
-            dir = File(cacheRoot, DIR_HTTP_CACHE),
-            cutoffMs = genericCutoffMs,
-            excludedCanonicalPaths = excludedCanonicalPaths,
-            skipFileNames = setOf("journal")
-        )
-        reclaimed += rm
-        deletedCount += cm
-
-        for (extRoot in externalCacheRoots) {
-            val (re, ce) = pruneFilesOlderThan(
-                dir = extRoot,
+        if (!isStreamCacheOpen) {
+            val (rv, cv) = pruneFilesOlderThan(
+                dir = File(cacheRoot, DIR_STREAM_CACHE),
                 cutoffMs = genericCutoffMs,
                 excludedCanonicalPaths = excludedCanonicalPaths,
-                skipFileNames = setOf("journal")
+                skipFileNames = setOf("cached_content_index.exi")
             )
-            reclaimed += re
-            deletedCount += ce
+            reclaimed += rv
+            deletedCount += cv
         }
 
-        val (ri, ci) = pruneFilesOlderThan(
-            dir = File(cacheRoot, DIR_IMAGE_CACHE),
-            cutoffMs = imageCutoffMs,
-            excludedCanonicalPaths = excludedCanonicalPaths,
-            skipFileNames = setOf("journal")
-        )
-        reclaimed += ri
-        deletedCount += ci
-
-        // Pass 3: Priority LRU budget enforcement (P2P -> Video -> Updates/Http/Misc -> Images)
+        // Pass 3: Priority LRU budget enforcement ONLY across unmanaged app directories
+        // (Updates -> Idle P2P -> Closed Video Buffers). Managed DiskLruCaches self-bound cleanly.
         val (budgetBytes, lowStorage) = SmartCachePolicy.effectiveBudgetBytes(maxCacheLimitMb, freeDiskBytes)
-        var currentTotal = inspectDirectoriesBreakdown(cacheRoot, externalCacheRoots, excludedCanonicalPaths).totalBytes
+        var currentTotal = (beforeTotal - reclaimed).coerceAtLeast(0L)
 
         if (currentTotal > budgetBytes) {
             val priorityBuckets = buildList<List<File>> {
@@ -554,15 +541,9 @@ object AppCacheManager {
                 if (!isP2pActive) {
                     add(listOf(File(cacheRoot, DIR_P2P_ENGINE), File(cacheRoot, DIR_P2P_META)))
                 }
-                add(listOf(File(cacheRoot, DIR_STREAM_CACHE)))
-                add(buildList {
-                    add(File(cacheRoot, DIR_HTTP_CACHE))
-                    cacheRoot.listFiles()?.forEach { child ->
-                        if (!isDedicatedManagedSubdir(child.name)) add(child)
-                    }
-                    addAll(externalCacheRoots)
-                })
-                add(listOf(File(cacheRoot, DIR_IMAGE_CACHE)))
+                if (!isStreamCacheOpen) {
+                    add(listOf(File(cacheRoot, DIR_STREAM_CACHE)))
+                }
             }
 
             for (bucketRoots in priorityBuckets) {
@@ -570,7 +551,7 @@ object AppCacheManager {
                 val candidates = collectDeletableFiles(
                     roots = bucketRoots,
                     excludedCanonicalPaths = excludedCanonicalPaths,
-                    skipFileNames = setOf("journal", "cached_content_index.exi")
+                    skipFileNames = setOf("cached_content_index.exi")
                 ).sortedBy { it.lastModified() }
 
                 for (file in candidates) {
@@ -583,10 +564,24 @@ object AppCacheManager {
                     }
                 }
             }
+
+            // Only under genuine low-storage emergency, safely evict HTTP cache via OkHttp API
+            if (currentTotal > budgetBytes && lowStorage && onEvictHttpCache != null) {
+                try {
+                    onEvictHttpCache()
+                } catch (_: Throwable) {}
+            }
         }
 
-        pruneEmptyChildDirs(cacheRoot, excludedCanonicalPaths)
-        externalCacheRoots.forEach { pruneEmptyChildDirs(it, excludedCanonicalPaths) }
+        // Only prune empty subdirs inside our own unmanaged directories
+        pruneEmptyChildDirs(File(cacheRoot, DIR_UPDATES), excludedCanonicalPaths)
+        if (!isP2pActive) {
+            pruneEmptyChildDirs(File(cacheRoot, DIR_P2P_ENGINE), excludedCanonicalPaths)
+            pruneEmptyChildDirs(File(cacheRoot, DIR_P2P_META), excludedCanonicalPaths)
+        }
+        if (!isStreamCacheOpen) {
+            pruneEmptyChildDirs(File(cacheRoot, DIR_STREAM_CACHE), excludedCanonicalPaths)
+        }
 
         val remainingTotal = inspectDirectoriesBreakdown(cacheRoot, externalCacheRoots, excludedCanonicalPaths).totalBytes
         return CacheCleanupReport(
@@ -595,16 +590,6 @@ object AppCacheManager {
             deletedFilesCount = deletedCount,
             lowStorageTriggered = lowStorage
         )
-    }
-
-    private fun isDedicatedManagedSubdir(name: String): Boolean {
-        return name == DIR_IMAGE_CACHE ||
-            name == DIR_STREAM_CACHE ||
-            name.startsWith(DIR_SEQ_PREFIX) ||
-            name == DIR_P2P_ENGINE ||
-            name == DIR_P2P_META ||
-            name == DIR_HTTP_CACHE ||
-            name == DIR_UPDATES
     }
 
     private fun pruneFilesOlderThan(
@@ -640,13 +625,15 @@ object AppCacheManager {
         fun walk(node: File) {
             try {
                 if (!node.exists() || Files.isSymbolicLink(node.toPath())) return
-                val canonicalPath = node.canonicalPath
-                if (excludedCanonicalPaths.any { canonicalPath.startsWith(it) }) return
                 if (node.isDirectory) {
+                    val canonicalPath = node.canonicalPath
+                    if (excludedCanonicalPaths.any { canonicalPath.startsWith(it) }) return
                     if (!visitedDirs.add(canonicalPath)) return
                     node.listFiles()?.forEach(::walk)
                 } else if (node.isFile && node.name !in skipFileNames) {
-                    result.add(node)
+                    if (excludedCanonicalPaths.isEmpty() || !isExcludedCanonical(node, excludedCanonicalPaths)) {
+                        result.add(node)
+                    }
                 }
             } catch (_: Exception) {}
         }
@@ -676,12 +663,17 @@ object AppCacheManager {
         }
     }
 
-    private fun getDirSizeSafely(
+    /**
+     * Fast, symlink-safe directory sizing. Validates canonical boundary on directories once
+     * rather than running `realpath()` on thousands of individual cached poster files.
+     */
+    private fun getDirSizeFast(
         dir: File?,
         visitedCanonical: MutableSet<String>,
         excludeCanonical: Set<String>
     ): Long {
         if (dir == null || !dir.exists()) return 0L
+        if (try { Files.isSymbolicLink(dir.toPath()) } catch (_: Exception) { true }) return 0L
         val canonical = try { dir.canonicalFile } catch (_: Exception) { return 0L }
         val canonicalPath = canonical.absolutePath
         if (!visitedCanonical.add(canonicalPath)) return 0L
@@ -691,14 +683,10 @@ object AppCacheManager {
         val files = dir.listFiles() ?: return 0L
         for (file in files) {
             try {
-                if (Files.isSymbolicLink(file.toPath())) continue
-                val fileCanonicalPath = file.canonicalFile.absolutePath
-                if (!fileCanonicalPath.startsWith(canonicalPath)) continue
-                if (excludeCanonical.any { fileCanonicalPath.startsWith(it) }) continue
-                size += if (file.isDirectory) {
-                    getDirSizeSafely(file, visitedCanonical, excludeCanonical)
-                } else {
-                    file.length()
+                if (file.isDirectory) {
+                    size += getDirSizeFast(file, visitedCanonical, excludeCanonical)
+                } else if (file.isFile) {
+                    size += file.length()
                 }
             } catch (_: Exception) {}
         }
@@ -725,10 +713,10 @@ object AppCacheManager {
                     file.delete()
                     continue
                 }
-                val fileCanonicalPath = file.canonicalFile.absolutePath
-                if (!fileCanonicalPath.startsWith(canonicalPath)) continue
-                if (excludeCanonical.any { fileCanonicalPath.startsWith(it) }) continue
                 if (file.isDirectory) {
+                    val fileCanonicalPath = file.canonicalFile.absolutePath
+                    if (!fileCanonicalPath.startsWith(canonicalPath)) continue
+                    if (excludeCanonical.any { fileCanonicalPath.startsWith(it) }) continue
                     val childDeleted = deleteDirSafely(file, visitedCanonical, excludeCanonical, isRoot = false)
                     allDeleted = allDeleted && childDeleted
                 } else {

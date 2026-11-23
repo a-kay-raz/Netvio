@@ -1,3 +1,26 @@
+# Netvio v1.3.1-Stable
+
+> ⚡ **Urgent Performance & Cache Hotfix:** Fixes the severe poster, content row, and metadata loading slowdown introduced in `v1.3.0-Stable` and makes cold launches and page transitions dramatically faster.
+
+---
+
+## 🛠️ What's Fixed
+
+- **Fixed Live Disk Cache Corruption (`image_cache` & `http_cache`):** Automatic cache maintenance and manual cache clearing previously deleted individual files/folders directly inside Coil's `image_cache/` and OkHttp's `http_cache/` while their `DiskLruCache` journals were open in memory — causing cache misses and full network re-downloads on every page. Both stores are now exclusively managed through Coil 3 and OkHttp's official LRU & clear APIs, and Android/Room system artifacts (`euthopiar_database.lck`, `oat_primary/`) are strictly protected.
+- **Eliminated Cold-Start Disk & Sync Contention:** Deferred background cache maintenance (20s post-launch, 12-hour interval with O(1) fast-path skip) and cloud/tracker reconciliation until after Home catalog & posters finish hydrating, so startup I/O and network bandwidth go 100% to loading content.
+- **Preserved In-Memory Poster Cache Across Pages:** Removed aggressive `TRIM_MEMORY_RUNNING_LOW` bitmap cache wiping in `EuthopiarApp.onTrimMemory()`, keeping hot posters and backdrops cached in RAM when switching between Home, Details, Search, and Library.
+- **Single-Flight Zero-Reflection DNS-over-HTTPS (`DohDns`) & HTTP Cache Freshness Fix:** Added single-flight lookup coalescing (eliminating cold-start DNS thundering herds when dozens of posters & API calls resolve simultaneously), replaced Jackson reflection parsing with zero-reflection `kotlinx.serialization.json` (100% R8-safe), parallelized host prefetching at boot, and stripped upstream CloudFront `Age` / `Expires` headers in `ForceCacheInterceptor` so newly cached TMDB responses are genuinely fresh for 30 minutes instead of being treated as expired on arrival.
+- **Faster Home First-Paint:** Initial Home load now fetches core feeds + first 6 curated discovery rails in parallel with Stremio catalogs (bounded by a 5s startup ceiling so a slow third-party addon cannot stall launch), loading remaining rails smoothly as you scroll.
+
+---
+
+## 📦 Build Info
+
+- **Version:** `1.3.1-Stable` (`versionCode 14`)
+- **Optimization:** R8 full code minification + resource shrinking enabled
+- **Upgrade Path:** Direct in-place OTA/APK upgrade over `v1.3.0-Stable` and earlier versions (same signing key, zero data loss)
+---
+
 # Netvio v1.3.0-Stable
 
 > 📺 **Euthopiar Android TV is now LIVE!** Pair your phone with the new 10-foot Android TV edition at **[TheARCreactorGUY/EuthopiarTV](https://github.com/TheARCreactorGUY/EuthopiarTV)** for instant playback handoff, live remote control, phone keyboard typing, and 1-tap addon/Debrid sync.

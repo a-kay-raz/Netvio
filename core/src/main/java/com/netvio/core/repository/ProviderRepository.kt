@@ -129,7 +129,13 @@ open class ProviderRepository(
                 emptyList<CatalogRow>()
             }
         }
-        val stremioDeferred = async { fetchStremioCatalogRails(offset = 0, limit = 6) }
+        val stremioDeferred = async {
+            // 5s startup ceiling: a slow addon must never hold first paint
+            // hostage. Per-catalog fetches already cap at 4.5s each.
+            withTimeoutOrNull(5_000L) {
+                fetchStremioCatalogRails(offset = 0, limit = 6, perCatalogTimeoutMs = 4_500L)
+            } ?: emptyList()
+        }
         val tmdbRows = tmdbDeferred.await()
         val stremioRows = stremioDeferred.await()
         val preferences = readCatalogPreferences()
@@ -230,7 +236,11 @@ open class ProviderRepository(
         return CatalogPage(items, def.supportsPagination && items.size >= pageSize)
     }
 
-    private suspend fun fetchStremioCatalogRails(offset: Int, limit: Int): List<CatalogRow> = withContext(Dispatchers.IO) {
+    private suspend fun fetchStremioCatalogRails(
+        offset: Int,
+        limit: Int,
+        perCatalogTimeoutMs: Long = 10_000L
+    ): List<CatalogRow> = withContext(Dispatchers.IO) {
         val readyAddons = readyEnabledAddons()
         if (readyAddons.isEmpty()) return@withContext emptyList()
 
@@ -248,7 +258,7 @@ open class ProviderRepository(
             val deferred = targetDefs.map { def ->
                 async(Dispatchers.IO) {
                     try {
-                        withTimeoutOrNull(15_000L) {
+                        withTimeoutOrNull(perCatalogTimeoutMs) {
                             val url = def.buildCatalogUrl()
                             val response = com.netvio.core.js.network.httpRequestRaw("GET", url, emptyMap(), "", followRedirects = true)
                             if (response.status in 200..299 && response.body.isNotBlank()) {
@@ -316,7 +326,7 @@ open class ProviderRepository(
             val stremioDeferreds = searchDefs.map { def ->
                 async(Dispatchers.IO) {
                     try {
-                        withTimeoutOrNull(15_000L) {
+                        withTimeoutOrNull(perCatalogTimeoutMs) {
                             val url = def.buildCatalogUrl(search = query)
                             val response = com.netvio.core.js.network.httpRequestRaw("GET", url, emptyMap(), "", followRedirects = true)
                             if (response.status in 200..299 && response.body.isNotBlank()) {

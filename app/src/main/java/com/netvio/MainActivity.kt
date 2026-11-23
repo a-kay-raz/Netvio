@@ -21,6 +21,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
@@ -136,14 +137,18 @@ class MainActivity : ComponentActivity() {
             com.netvio.ui.splash.AppLaunchCoordinator.reset()
         }
 
-        // Automatic background reconciliation for Trakt, Simkl & Supabase Cloud.
-        // Non-critical for first paint, so it waits for the splash ignition
-        // to finish (first frame) instead of competing with Home's first
-        // load for network and database. The timeout keeps it running even
-        // if ignition never reports finished; on a warm start ignition is
-        // already finished and this runs at once.
+        // Ordered startup reconciliation for Trakt, Simkl & Supabase Cloud.
+        // Waits until Home hydrates (or max 5s) so startup network & Room
+        // bandwidth stay dedicated to Home catalog & posters, then waits for
+        // the splash ignition to finish (first frame, 15s timeout) instead of
+        // competing with Home's first load. Non-critical for first paint; on
+        // a warm start ignition is already finished and this runs at once.
         // Ordered: Google Cloud pulls tombstones first, then Trakt & Simkl sync.
         lifecycleScope.launch(Dispatchers.IO) {
+            withTimeoutOrNull(5_000L) {
+                com.netvio.ui.splash.AppLaunchCoordinator.isHomeDataReady.first { it }
+            }
+            delay(1_500L)
             try {
                 withTimeoutOrNull(15_000L) {
                     com.netvio.ui.splash.AppLaunchCoordinator.isIgnitionActive.first { !it }

@@ -1989,14 +1989,19 @@ object TmdbBridge {
                     }
                 }
 
-                // For candidate hero items, resolve top 6 logos quickly
+                // For candidate hero items, resolve top 4 logos quickly with tight per-call timeout.
+                // Indian TV serials are filtered out of hero candidates: Netvio's
+                // catalog is Indian-only, so this always applies (no region system).
                 val finalItems = if (resolveLogos && items.isNotEmpty()) {
                     coroutineScope {
-                        val topIdsToResolve = items.take(6).map { it.id }.toSet()
+                        val candidateItems = items.filterNot { isIndianTvSerial(it) }
+                        val topIdsToResolve = candidateItems.take(4).map { it.id }.toSet()
                         items.map { item ->
                             if (item.id in topIdsToResolve) {
                                 async {
-                                    val logo = resolveLogo(client, item.id, item.type == MediaType.TV_SERIES, apiKey = apiKey)
+                                    val logo = kotlinx.coroutines.withTimeoutOrNull(2200L) {
+                                        resolveLogo(client, item.id, item.type == MediaType.TV_SERIES, apiKey = apiKey)
+                                    }
                                     item.copy(logoUrl = logo)
                                 }
                             } else {
@@ -2133,9 +2138,13 @@ object TmdbBridge {
         return feeds
     }
 
+    const val INITIAL_PROGRESSIVE_RAIL_COUNT: Int = 6
+
     /**
      * Fetches standard TMDB home catalog feeds concurrently for the Home Carousel and content rows.
      * Uses memory cache to guarantee instant (< 50ms) catalog loads on repeat navigation.
+     * Loads core feeds + an initial batch of discovery rails so first paint is fast, while
+     * remaining rails paginate smoothly via [fetchProgressiveRails].
      */
     suspend fun fetchHomeCatalog(
         client: OkHttpClient,
@@ -2155,17 +2164,19 @@ object TmdbBridge {
             coroutineScope {
                 allFeeds.map { feed ->
                     async {
-                        fetchCatalogRow(
-                            client = client,
-                            title = feed.title,
-                            url = feed.url,
-                            providerName = "tmdb",
-                            resolveLogos = feed.resolveLogos,
-                            apiKey = apiKey,
-                            eyebrow = feed.eyebrow,
-                            subtitle = feed.subtitle,
-                            catalogKey = tmdbCatalogKey(feed.title)
-                        )
+                        kotlinx.coroutines.withTimeoutOrNull(8_000L) {
+                            fetchCatalogRow(
+                                client = client,
+                                title = feed.title,
+                                url = feed.url,
+                                providerName = "tmdb",
+                                resolveLogos = feed.resolveLogos,
+                                apiKey = apiKey,
+                                eyebrow = feed.eyebrow,
+                                subtitle = feed.subtitle,
+                                catalogKey = tmdbCatalogKey(feed.title)
+                            )
+                        }
                     }
                 }.awaitAll().filterNotNull()
             }

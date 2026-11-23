@@ -29,6 +29,8 @@ object StreamingPlaybackCacheManager {
         configuredMaxCacheSizeBytes = bytes.coerceIn(MIN_CACHE_SIZE_BYTES, MAX_CACHE_SIZE_BYTES)
     }
 
+    fun isCacheOpen(): Boolean = simpleCache != null
+
     @Synchronized
     fun getCache(context: Context): SimpleCache {
         return simpleCache ?: synchronized(this) {
