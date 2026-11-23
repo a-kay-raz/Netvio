@@ -326,7 +326,7 @@ open class ProviderRepository(
             val stremioDeferreds = searchDefs.map { def ->
                 async(Dispatchers.IO) {
                     try {
-                        withTimeoutOrNull(perCatalogTimeoutMs) {
+                        withTimeoutOrNull(15_000L) {
                             val url = def.buildCatalogUrl(search = query)
                             val response = com.netvio.core.js.network.httpRequestRaw("GET", url, emptyMap(), "", followRedirects = true)
                             if (response.status in 200..299 && response.body.isNotBlank()) {
